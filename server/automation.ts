@@ -86,7 +86,14 @@ async function locatePhoneInput(page: Page): Promise<Locator | null> {
 async function locateSubmitButton(page: Page, phoneInput: Locator): Promise<Locator | null> {
   const parentForm = phoneInput.locator('xpath=ancestor::form[1]');
   const hasParentForm = (await parentForm.count().catch(() => 0)) > 0;
-  const scope: Page | Locator = hasParentForm ? parentForm : page;
+  const parentDialog = phoneInput.locator('xpath=ancestor::*[@role="dialog"][1]');
+  const hasParentDialog = (await parentDialog.count().catch(() => 0)) > 0;
+
+  const scope: Page | Locator = hasParentForm
+    ? parentForm
+    : hasParentDialog
+      ? parentDialog
+      : page;
 
   const candidates: Locator[] = [
     scope.locator('button[type="submit"], input[type="submit"]'),
@@ -102,7 +109,7 @@ async function locateSubmitButton(page: Page, phoneInput: Locator): Promise<Loca
     return foundInScope;
   }
 
-  if (hasParentForm) {
+  if (hasParentForm || hasParentDialog) {
     return findFirstVisibleLocator([
       page.locator('button[type="submit"], input[type="submit"]'),
       page.getByRole('button', {
@@ -112,6 +119,34 @@ async function locateSubmitButton(page: Page, phoneInput: Locator): Promise<Loca
   }
 
   return null;
+}
+
+async function waitForPhoneInput(page: Page, timeoutMs = 6000): Promise<Locator | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const input = await locatePhoneInput(page);
+    if (input) {
+      return input;
+    }
+    await page.waitForTimeout(300);
+  }
+  return locatePhoneInput(page);
+}
+
+async function waitForSubmitButton(
+  page: Page,
+  phoneInput: Locator,
+  timeoutMs = 2000,
+): Promise<Locator | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const button = await locateSubmitButton(page, phoneInput);
+    if (button) {
+      return button;
+    }
+    await page.waitForTimeout(200);
+  }
+  return locateSubmitButton(page, phoneInput);
 }
 
 async function checkPageForVerificationGate(page: Page): Promise<boolean> {
@@ -163,8 +198,8 @@ async function processSingleNumber(
       };
     }
 
-    // Wait briefly for client-rendered forms if any
-    await page.waitForTimeout(250);
+    // Wait for client-rendered SPA forms to hydrate before checking
+    await page.waitForLoadState('networkidle', { timeout: 3500 }).catch(() => undefined);
 
     if (await checkPageForVerificationGate(page)) {
       return {
@@ -173,7 +208,7 @@ async function processSingleNumber(
       };
     }
 
-    const phoneInput = await locatePhoneInput(page);
+    const phoneInput = await waitForPhoneInput(page, 6000);
     if (!phoneInput) {
       return {
         status: 'failed',
@@ -181,16 +216,16 @@ async function processSingleNumber(
       };
     }
 
-    const submitButton = await locateSubmitButton(page, phoneInput);
+    await phoneInput.click({ timeout: 5000 });
+    await phoneInput.fill(phone, { timeout: 5000 });
+
+    const submitButton = await waitForSubmitButton(page, phoneInput, 2000);
     if (!submitButton) {
       return {
         status: 'failed',
-        details: 'تعذر العثور على زر الإرسال داخل الصفحة.',
+        details: 'تعذر العثور على زر إرسال مفعّل بعد إدخال الرقم (قد يرفض النموذج صيغة الرقم أو يتطلب اختيار رمز الدولة).',
       };
     }
-
-    await phoneInput.click({ timeout: 5000 });
-    await phoneInput.fill(phone, { timeout: 5000 });
 
     lastHttpErrorStatus = null;
     await submitButton.click({ timeout: 5000 });
