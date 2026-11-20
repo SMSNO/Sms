@@ -48,9 +48,9 @@ async function main() {
   }
 
   const rawDelaySeconds = process.env.DELAY_SECONDS;
-  const parsedDelaySeconds = rawDelaySeconds !== undefined ? Number(rawDelaySeconds) : 60;
+  const parsedDelaySeconds = rawDelaySeconds !== undefined ? Number(rawDelaySeconds) : 15;
   const delaySeconds =
-    Number.isFinite(parsedDelaySeconds) && parsedDelaySeconds >= 0 ? parsedDelaySeconds : 60;
+    Number.isFinite(parsedDelaySeconds) && parsedDelaySeconds >= 0 ? parsedDelaySeconds : 15;
   const delayMs = delaySeconds * 1000;
 
   console.log(`Target URL: ${urlCheck.normalizedUrl}`);

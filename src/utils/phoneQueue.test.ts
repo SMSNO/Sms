@@ -125,8 +125,8 @@ test('splitPhoneCountryCode parses + and 00 international prefixes accurately', 
   });
 });
 
-test('waitWithAbort defaults to 60s interval and resolves cleanly on completion or abort', async () => {
-  assert.equal(DEFAULT_REQUEST_INTERVAL_MS, 60_000);
+test('waitWithAbort defaults to 15s interval and resolves cleanly on completion or abort', async () => {
+  assert.equal(DEFAULT_REQUEST_INTERVAL_MS, 15_000);
 
   const normalController = new AbortController();
   const completed = await waitWithAbort(20, normalController.signal);

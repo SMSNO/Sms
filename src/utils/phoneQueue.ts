@@ -275,7 +275,7 @@ export function splitPhoneCountryCode(rawPhone: string): ParsedCountryPhone {
   };
 }
 
-export const DEFAULT_REQUEST_INTERVAL_MS = 60_000;
+export const DEFAULT_REQUEST_INTERVAL_MS = 15_000;
 
 /**
  * Waits for the specified duration in milliseconds unless aborted via signal.
