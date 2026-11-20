@@ -1,4 +1,4 @@
-name: CI Workflow
+name: Automation & CI Workflow
 
 on:
   push:
@@ -6,9 +6,18 @@ on:
   pull_request:
     branches: [main, master]
   workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'رابط الصفحة المستهدفة (URL) — اتركه فارغًا لتشغيل اختبار النموذج المحلي'
+        required: false
+        type: string
+      phone_numbers:
+        description: 'قائمة أرقام الهواتف (مفصولة بفاصلة , أو فاصلة منقوطة ; أو سطر جديد)'
+        required: false
+        type: string
 
 jobs:
-  test-and-build:
+  run-automation-and-checks:
     runs-on: ubuntu-latest
 
     steps:
@@ -35,7 +44,15 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Run Playwright automation for provided URL and numbers
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.target_url != '' }}
+        env:
+          TARGET_URL: ${{ inputs.target_url }}
+          PHONE_NUMBERS: ${{ inputs.phone_numbers }}
+        run: node server/run-workflow.ts
+
       - name: Run end-to-end Playwright automation check
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.target_url == '' }}
         run: |
           NODE_ENV=production node server.ts &
           SERVER_PID=$!
