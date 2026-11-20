@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DEFAULT_REQUEST_INTERVAL_MS,
   detectVerificationGate,
   normalizePhoneKey,
   parseAndDeduplicatePhones,
   splitPhoneCountryCode,
   validateTargetUrl,
+  waitWithAbort,
 } from './phoneQueue.ts';
 
 test('validateTargetUrl accepts valid http and https URLs', () => {
@@ -121,4 +123,17 @@ test('splitPhoneCountryCode parses + and 00 international prefixes accurately', 
     dialDigits: null,
     nationalNumber: '01223189009',
   });
+});
+
+test('waitWithAbort defaults to 60s interval and resolves cleanly on completion or abort', async () => {
+  assert.equal(DEFAULT_REQUEST_INTERVAL_MS, 60_000);
+
+  const normalController = new AbortController();
+  const completed = await waitWithAbort(20, normalController.signal);
+  assert.equal(completed, true);
+
+  const abortController = new AbortController();
+  setTimeout(() => abortController.abort(), 15);
+  const aborted = await waitWithAbort(5000, abortController.signal);
+  assert.equal(aborted, false);
 });

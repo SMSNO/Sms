@@ -203,11 +203,21 @@ app.post('/api/automate', async (req, res) => {
     skippedAlreadyProcessed: parsed.skippedAlreadyProcessed,
   });
 
+  const parsedEnvDelay = Number(process.env.DELAY_SECONDS);
+  const envDefaultDelayMs =
+    Number.isFinite(parsedEnvDelay) && parsedEnvDelay >= 0 ? parsedEnvDelay * 1000 : undefined;
+  const bodyDelayMs =
+    typeof req.body?.delayMs === 'number' && Number.isFinite(req.body.delayMs) && req.body.delayMs >= 0
+      ? req.body.delayMs
+      : undefined;
+  const delayBetweenRequestsMs = bodyDelayMs ?? envDefaultDelayMs;
+
   try {
     await runSequentialAutomation({
       targetUrl: urlCheck.normalizedUrl,
       items: indexedItems,
       signal: abortController.signal,
+      delayBetweenRequestsMs,
       onUpdate: (update) => {
         sendEvent({
           type: update.status === 'processing' ? 'processing' : 'result',

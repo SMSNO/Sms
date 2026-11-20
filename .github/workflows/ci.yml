@@ -19,7 +19,7 @@ on:
 jobs:
   run-automation-and-checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
 
     steps:
       - name: Checkout repository
@@ -73,7 +73,8 @@ jobs:
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 url: "http://localhost:3000/test-form",
-                phones: "+966501234567\n+966501234567\nfail-123\n+966559876543"
+                phones: "+966501234567\n+966501234567\nfail-123\n+966559876543",
+                delayMs: 0
               })
             });
             assert.equal(res.status, 200);
@@ -91,7 +92,8 @@ jobs:
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 url: "http://localhost:3000/test-form-country",
-                phones: "+201223189009\n+966501234567"
+                phones: "+201223189009\n+966501234567",
+                delayMs: 0
               })
             });
             assert.equal(countryRes.status, 200);

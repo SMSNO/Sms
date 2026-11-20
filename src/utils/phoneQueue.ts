@@ -275,3 +275,33 @@ export function splitPhoneCountryCode(rawPhone: string): ParsedCountryPhone {
   };
 }
 
+export const DEFAULT_REQUEST_INTERVAL_MS = 60_000;
+
+/**
+ * Waits for the specified duration in milliseconds unless aborted via signal.
+ * Resolves to true when the wait finishes, or false if aborted early.
+ */
+export function waitWithAbort(ms: number, signal: AbortSignal): Promise<boolean> {
+  if (ms <= 0) {
+    return Promise.resolve(!signal.aborted);
+  }
+  if (signal.aborted) {
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve(true);
+    }, ms);
+
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+

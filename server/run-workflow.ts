@@ -47,9 +47,15 @@ async function main() {
     process.exit(1);
   }
 
+  const rawDelaySeconds = process.env.DELAY_SECONDS;
+  const parsedDelaySeconds = rawDelaySeconds !== undefined ? Number(rawDelaySeconds) : 60;
+  const delaySeconds =
+    Number.isFinite(parsedDelaySeconds) && parsedDelaySeconds >= 0 ? parsedDelaySeconds : 60;
+  const delayMs = delaySeconds * 1000;
+
   console.log(`Target URL: ${urlCheck.normalizedUrl}`);
   console.log(
-    `Source: ${phoneSource} | Processing ${parsed.queue.length} unique numbers (skipped duplicates: ${parsed.skippedDuplicates})`,
+    `Source: ${phoneSource} | Processing ${parsed.queue.length} unique numbers (skipped duplicates: ${parsed.skippedDuplicates}) | Interval: ${delaySeconds}s`,
   );
 
   const items = parsed.queue.map((item, idx) => ({
@@ -66,7 +72,14 @@ async function main() {
       targetUrl: urlCheck.normalizedUrl,
       items,
       signal: abortController.signal,
+      delayBetweenRequestsMs: delayMs,
       onUpdate: (update) => {
+        if (update.status === 'processing' && update.details.includes('الفاصل الزمني')) {
+          console.log(
+            `[${update.index}/${items.length}] ${update.phone} -> Waiting ${delaySeconds}s before next request (${update.timestamp})`,
+          );
+          return;
+        }
         if (update.status === 'success' || update.status === 'failed') {
           results.set(update.index, update);
           console.log(

@@ -1,8 +1,10 @@
 import fs from 'node:fs';
 import { chromium, type Browser, type Locator, type Page } from 'playwright';
 import {
+  DEFAULT_REQUEST_INTERVAL_MS,
   detectVerificationGate,
   splitPhoneCountryCode,
+  waitWithAbort,
   type AttemptStatus,
 } from '../src/utils/phoneQueue.ts';
 
@@ -615,11 +617,19 @@ export async function runSequentialAutomation(options: {
   targetUrl: string;
   items: AutomationItem[];
   signal: AbortSignal;
+  delayBetweenRequestsMs?: number;
   onUpdate: (update: AutomationUpdate) => void;
 }): Promise<void> {
-  const { targetUrl, items, signal, onUpdate } = options;
+  const {
+    targetUrl,
+    items,
+    signal,
+    delayBetweenRequestsMs = DEFAULT_REQUEST_INTERVAL_MS,
+    onUpdate,
+  } = options;
   const processedInRun = new Set<string>();
   let browser: Browser | null = null;
+  let hasAttemptedPrevious = false;
 
   try {
     browser = await launchBrowser();
@@ -633,6 +643,25 @@ export async function runSequentialAutomation(options: {
         continue;
       }
       processedInRun.add(item.normalizedKey);
+
+      if (hasAttemptedPrevious && delayBetweenRequestsMs > 0) {
+        const delaySeconds = Math.round(delayBetweenRequestsMs / 1000);
+        onUpdate({
+          index: item.index,
+          phone: item.phone,
+          normalizedKey: item.normalizedKey,
+          status: 'processing',
+          details: `في انتظار الفاصل الزمني (${delaySeconds} ثانية) قبل الإرسال...`,
+          timestamp: formatTimestamp(),
+        });
+
+        const completedWait = await waitWithAbort(delayBetweenRequestsMs, signal);
+        if (!completedWait || signal.aborted) {
+          break;
+        }
+      }
+
+      hasAttemptedPrevious = true;
 
       onUpdate({
         index: item.index,
