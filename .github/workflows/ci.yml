@@ -84,4 +84,22 @@ jobs:
             assert.equal(results[1].status, "failed");
             assert.equal(results[2].status, "success");
             console.log("E2E Playwright automation verification passed:", results.map((r) => ({ phone: r.phone, status: r.status })));
+
+            const countryRes = await fetch("http://localhost:3000/api/automate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                url: "http://localhost:3000/test-form-country",
+                phones: "+201223189009\n+966501234567"
+              })
+            });
+            assert.equal(countryRes.status, 200);
+            const countryText = await countryRes.text();
+            const countryResults = countryText.trim().split("\n").map((line) => JSON.parse(line)).filter((e) => e.type === "result");
+            assert.equal(countryResults.length, 2);
+            assert.equal(countryResults[0].status, "success");
+            assert.ok(countryResults[0].details.includes("+20") && countryResults[0].details.includes("1223189009"));
+            assert.equal(countryResults[1].status, "success");
+            assert.ok(countryResults[1].details.includes("+966") && countryResults[1].details.includes("501234567"));
+            console.log("Country-code E2E verification passed:", countryResults.map((r) => ({ phone: r.phone, details: r.details })));
           '

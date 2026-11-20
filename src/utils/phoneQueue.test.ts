@@ -4,6 +4,7 @@ import {
   detectVerificationGate,
   normalizePhoneKey,
   parseAndDeduplicatePhones,
+  splitPhoneCountryCode,
   validateTargetUrl,
 } from './phoneQueue.ts';
 
@@ -67,4 +68,33 @@ test('detectVerificationGate flags captcha widgets or verification text', () => 
   assert.equal(detectVerificationGate('Enter your phone number', true), true);
   assert.equal(detectVerificationGate('Please verify you are human to continue', false), true);
   assert.equal(detectVerificationGate('Checking your browser before accessing', false), true);
+});
+
+test('splitPhoneCountryCode parses + and 00 international prefixes accurately', () => {
+  assert.deepEqual(splitPhoneCountryCode('+201223189009'), {
+    countryCode: '+20',
+    dialDigits: '20',
+    nationalNumber: '1223189009',
+    preferredCountryName: undefined,
+  });
+
+  assert.deepEqual(splitPhoneCountryCode('00966 50 123 4567'), {
+    countryCode: '+966',
+    dialDigits: '966',
+    nationalNumber: '501234567',
+    preferredCountryName: undefined,
+  });
+
+  assert.deepEqual(splitPhoneCountryCode('+1 (415) 555-0199'), {
+    countryCode: '+1',
+    dialDigits: '1',
+    nationalNumber: '4155550199',
+    preferredCountryName: 'United States',
+  });
+
+  assert.deepEqual(splitPhoneCountryCode('01223189009'), {
+    countryCode: null,
+    dialDigits: null,
+    nationalNumber: '01223189009',
+  });
 });

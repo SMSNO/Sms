@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { chromium, type Browser, type Locator, type Page } from 'playwright';
 import {
   detectVerificationGate,
+  splitPhoneCountryCode,
   type AttemptStatus,
 } from '../src/utils/phoneQueue.ts';
 
@@ -170,6 +171,164 @@ async function waitForSubmitButton(
   return locateSubmitButton(page, phoneInput);
 }
 
+async function selectCountryCodeIfPresent(
+  page: Page,
+  phoneInput: Locator,
+  countryCode: string,
+  dialDigits: string,
+  preferredCountryName?: string,
+): Promise<boolean> {
+  const parentForm = phoneInput.locator('xpath=ancestor::form[1]');
+  const hasParentForm = (await parentForm.count().catch(() => 0)) > 0;
+  const parentDialog = phoneInput.locator('xpath=ancestor::*[@role="dialog"][1]');
+  const hasParentDialog = (await parentDialog.count().catch(() => 0)) > 0;
+  const scope: Page | Locator = hasParentForm
+    ? parentForm
+    : hasParentDialog
+      ? parentDialog
+      : page;
+
+  const exactDialRegex = new RegExp(`(?:^|\\D)\\+${dialDigits}(?:\\D|$)`);
+
+  // 1) Native <select> country-code dropdown inside scope
+  const selects = scope.locator('select');
+  const selectCount = await selects.count().catch(() => 0);
+  for (let i = 0; i < selectCount; i += 1) {
+    const select = selects.nth(i);
+    if (!(await select.isVisible().catch(() => false))) continue;
+
+    const chosenValue = await select
+      .evaluate(
+        (el, args) => {
+          const sel = el as HTMLSelectElement;
+          const regex = new RegExp(`(?:^|\\D)\\+${args.dialDigits}(?:\\D|$)`);
+          const matches: Array<{ value: string; text: string }> = [];
+          for (const opt of Array.from(sel.options)) {
+            const label = `${opt.textContent || ''} ${opt.value || ''}`;
+            if (regex.test(label) || opt.value === `+${args.dialDigits}` || opt.value === args.dialDigits) {
+              matches.push({ value: opt.value, text: opt.textContent || '' });
+            }
+          }
+          if (matches.length === 0) return null;
+          if (args.preferredName) {
+            const pref = matches.find((m) =>
+              m.text.toLowerCase().includes(args.preferredName!.toLowerCase()),
+            );
+            if (pref) return pref.value;
+          }
+          return matches[0].value;
+        },
+        { dialDigits, preferredName: preferredCountryName ?? null },
+      )
+      .catch(() => null);
+
+    if (chosenValue !== null) {
+      await select.selectOption(chosenValue).catch(() => undefined);
+      return true;
+    }
+  }
+
+  // 2) intl-tel-input flag dropdown (.iti__selected-flag)
+  const itiButton = scope.locator('.iti__selected-flag, .iti__flag-container button').first();
+  if ((await itiButton.count().catch(() => 0)) > 0 && (await itiButton.isVisible().catch(() => false))) {
+    const currentText = (await itiButton.innerText().catch(() => '')).trim();
+    if (exactDialRegex.test(currentText)) {
+      return true;
+    }
+    await itiButton.click({ timeout: 3000 }).catch(() => undefined);
+    await page.waitForTimeout(200);
+    const countryOption = page.locator(`.iti__country[data-dial-code="${dialDigits}"]`).first();
+    if ((await countryOption.count().catch(() => 0)) > 0) {
+      await countryOption.click({ timeout: 3000 }).catch(() => undefined);
+      return true;
+    }
+  }
+
+  // 3) Custom country-code picker button (e.g. button[aria-label*="country"] or button with +XX)
+  const countryBtnCandidates: Locator[] = [
+    scope.locator(
+      'button[aria-label*="country" i], button[aria-label*="dial" i], button[aria-label*="code" i], button[aria-label*="الدولة"]',
+    ),
+    scope.locator('button').filter({ hasText: /\+\d{1,3}\b/ }),
+  ];
+
+  let countryBtn: Locator | null = null;
+  for (const candidate of countryBtnCandidates) {
+    const count = await candidate.count().catch(() => 0);
+    for (let i = 0; i < count; i += 1) {
+      const nth = candidate.nth(i);
+      if ((await nth.isVisible().catch(() => false)) && (await nth.isEnabled().catch(() => false))) {
+        countryBtn = nth;
+        break;
+      }
+    }
+    if (countryBtn) break;
+  }
+
+  if (!countryBtn) {
+    return false;
+  }
+
+  const currentBtnText = (await countryBtn.innerText().catch(() => '')).trim();
+  if (exactDialRegex.test(currentBtnText)) {
+    return true;
+  }
+
+  await countryBtn.click({ timeout: 3000 }).catch(() => undefined);
+  await page.waitForTimeout(300);
+
+  // Find matching country item across dialog or page popover first (avoids filtering out dial codes if search only matches names)
+  const searchScope: Page | Locator = hasParentDialog ? parentDialog : page;
+  const findCountryOption = async (): Promise<Locator | null> => {
+    const optionCandidates = searchScope.locator(
+      'button, [role="option"], [role="menuitem"], li',
+    );
+    const optCount = await optionCandidates.count().catch(() => 0);
+    let fallbackMatch: Locator | null = null;
+
+    for (let i = 0; i < optCount; i += 1) {
+      const opt = optionCandidates.nth(i);
+      const visible = await opt.isVisible().catch(() => false);
+      if (!visible) continue;
+      const text = (await opt.innerText().catch(() => '')).trim();
+      if (!text || !exactDialRegex.test(text)) continue;
+
+      if (preferredCountryName && text.toLowerCase().includes(preferredCountryName.toLowerCase())) {
+        return opt;
+      }
+
+      if (!fallbackMatch) {
+        fallbackMatch = opt;
+      }
+    }
+    return fallbackMatch;
+  };
+
+  let matchedOption = await findCountryOption();
+
+  if (!matchedOption) {
+    const searchInput = searchScope
+      .locator(
+        'input[type="search"], input[name*="search" i], input[placeholder*="search" i], input[aria-label*="search" i], input[placeholder*="بحث"]',
+      )
+      .first();
+    if ((await searchInput.count().catch(() => 0)) > 0 && (await searchInput.isVisible().catch(() => false))) {
+      const searchQuery = preferredCountryName || countryCode;
+      await searchInput.fill(searchQuery, { timeout: 2000 }).catch(() => undefined);
+      await page.waitForTimeout(250);
+      matchedOption = await findCountryOption();
+    }
+  }
+
+  if (matchedOption) {
+    await matchedOption.click({ timeout: 3000 }).catch(() => undefined);
+    await page.waitForTimeout(250);
+    return true;
+  }
+
+  return false;
+}
+
 async function checkPageForVerificationGate(page: Page): Promise<boolean> {
   const captchaSelectors = [
     'iframe[src*="recaptcha"]',
@@ -260,10 +419,32 @@ async function processSingleNumber(
       };
     }
 
-    await phoneInput.click({ timeout: 5000 });
-    await phoneInput.fill(phone, { timeout: 5000 });
+    const parsedPhone = splitPhoneCountryCode(phone);
+    let activePhoneInput = phoneInput;
+    let valueToFill = phone;
 
-    const submitButton = await waitForSubmitButton(page, phoneInput, 2000);
+    if (parsedPhone.countryCode && parsedPhone.dialDigits) {
+      const countryHandled = await selectCountryCodeIfPresent(
+        page,
+        phoneInput,
+        parsedPhone.countryCode,
+        parsedPhone.dialDigits,
+        parsedPhone.preferredCountryName,
+      );
+      if (countryHandled) {
+        valueToFill = parsedPhone.nationalNumber;
+        // Re-locate phone input in case selecting country code re-mounted the form/dialog
+        const refreshed = await waitForPhoneInput(page, 3000);
+        if (refreshed) {
+          activePhoneInput = refreshed;
+        }
+      }
+    }
+
+    await activePhoneInput.click({ timeout: 5000 });
+    await activePhoneInput.fill(valueToFill, { timeout: 5000 });
+
+    const submitButton = await waitForSubmitButton(page, activePhoneInput, 2000);
     if (!submitButton) {
       return {
         status: 'failed',
@@ -289,7 +470,7 @@ async function processSingleNumber(
     await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => undefined);
 
     // Check native HTML5 validation state if form stayed on page
-    const isInputInvalid = await phoneInput
+    const isInputInvalid = await activePhoneInput
       .evaluate((el) => {
         if (el instanceof HTMLInputElement) {
           return !el.checkValidity();
@@ -299,7 +480,7 @@ async function processSingleNumber(
       .catch(() => false);
 
     if (isInputInvalid) {
-      const validationMsg = await phoneInput
+      const validationMsg = await activePhoneInput
         .evaluate((el) => (el instanceof HTMLInputElement ? el.validationMessage : ''))
         .catch(() => '');
       return {

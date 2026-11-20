@@ -90,6 +90,67 @@ app.post('/api/test-form-submit', (req, res) => {
   res.json({ ok: true, message: `تم استلام الرقم ${rawPhone} بنجاح.` });
 });
 
+app.get('/test-form-country', (_req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <title>نموذج اختبار مع كود الدولة</title>
+  </head>
+  <body>
+    <div role="dialog">
+      <h2>What's your number?</h2>
+      <div id="phone-view">
+        <button id="country-btn" type="button" aria-label="Select your phone country code">GB +44</button>
+        <input id="phone-input" name="phone_number" type="text" />
+        <button id="next-btn" type="button" disabled>Next</button>
+      </div>
+      <div id="country-list" style="display:none;">
+        <button type="button" data-code="+44">United Kingdom +44</button>
+        <button type="button" data-code="+20">Egypt +20</button>
+        <button type="button" data-code="+966">Saudi Arabia +966</button>
+        <button type="button" data-code="+1">United States +1</button>
+      </div>
+      <div id="feedback"></div>
+    </div>
+    <script>
+      let selectedCode = '+44';
+      const countryBtn = document.getElementById('country-btn');
+      const phoneView = document.getElementById('phone-view');
+      const countryList = document.getElementById('country-list');
+      const input = document.getElementById('phone-input');
+      const nextBtn = document.getElementById('next-btn');
+      const feedback = document.getElementById('feedback');
+
+      countryBtn.addEventListener('click', () => {
+        phoneView.style.display = 'none';
+        countryList.style.display = 'block';
+      });
+
+      countryList.querySelectorAll('button').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          selectedCode = btn.getAttribute('data-code');
+          countryBtn.textContent = selectedCode;
+          countryList.style.display = 'none';
+          phoneView.style.display = 'block';
+        });
+      });
+
+      input.addEventListener('input', () => {
+        nextBtn.disabled = input.value.trim().length < 5;
+      });
+
+      nextBtn.addEventListener('click', () => {
+        feedback.setAttribute('role', 'status');
+        feedback.setAttribute('data-status', 'success');
+        feedback.textContent = 'تم الإرسال بالكود ' + selectedCode + ' والرقم ' + input.value.trim();
+      });
+    </script>
+  </body>
+</html>`);
+});
+
 app.post('/api/automate', async (req, res) => {
   const rawUrl = typeof req.body?.url === 'string' ? req.body.url : '';
   const rawPhones = typeof req.body?.phones === 'string' ? req.body.phones : '';
