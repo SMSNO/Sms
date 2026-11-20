@@ -249,13 +249,21 @@ async function processSingleNumber(
     }
 
     lastHttpErrorStatus = null;
+    const submitResponsePromise = page
+      .waitForResponse(
+        (response) =>
+          response.request().method() !== 'GET' ||
+          response.url() !== targetUrl,
+        { timeout: 3500 },
+      )
+      .catch(() => null);
+
     await submitButton.click({ timeout: 5000 });
 
-    // Wait for possible navigation or AJAX completion
-    await Promise.race([
-      page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => undefined),
-      page.waitForTimeout(1200),
-    ]);
+    // Wait for form submission response or client-side validation settle
+    await Promise.race([submitResponsePromise, page.waitForTimeout(1500)]);
+    await page.waitForTimeout(350);
+    await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => undefined);
 
     // Check native HTML5 validation state if form stayed on page
     const isInputInvalid = await phoneInput
