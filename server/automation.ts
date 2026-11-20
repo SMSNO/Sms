@@ -552,6 +552,19 @@ async function processSingleNumber(
 
     const lastErr = httpErrors.at(-1);
     if (lastErr) {
+      const hostSuffix = lastErr.host ? ` - ${lastErr.host}` : '';
+      if (lastErr.status === 429) {
+        return {
+          status: 'failed',
+          details: `رفض الخادم الطلب لتجاوز حد المحاولات المسموح به (رمز 429${hostSuffix}).`,
+        };
+      }
+      if (lastErr.status === 403) {
+        return {
+          status: 'failed',
+          details: `رفض الخادم الطلب لعدم توفر الصلاحية أو لقيود الحماية على الخادم (رمز 403${hostSuffix}).`,
+        };
+      }
       return {
         status: 'failed',
         details: lastErr.host
@@ -610,10 +623,6 @@ export async function runSequentialAutomation(options: {
 
   try {
     browser = await launchBrowser();
-    const context = await browser.newContext({
-      viewport: { width: 1280, height: 800 },
-    });
-    const page = await context.newPage();
 
     for (const item of items) {
       if (signal.aborted) {
@@ -630,11 +639,20 @@ export async function runSequentialAutomation(options: {
         phone: item.phone,
         normalizedKey: item.normalizedKey,
         status: 'processing',
-        details: 'جاري فتح الصفحة وإرسال الرقم...',
+        details: 'جاري فتح الصفحة في جلسة مستقلة وإرسال الرقم...',
         timestamp: formatTimestamp(),
       });
 
-      const outcome = await processSingleNumber(page, targetUrl, item.phone);
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+      });
+      let outcome: { status: 'success' | 'failed'; details: string };
+      try {
+        const page = await context.newPage();
+        outcome = await processSingleNumber(page, targetUrl, item.phone);
+      } finally {
+        await context.close().catch(() => undefined);
+      }
 
       if (signal.aborted) {
         break;
@@ -649,8 +667,6 @@ export async function runSequentialAutomation(options: {
         timestamp: formatTimestamp(),
       });
     }
-
-    await context.close().catch(() => undefined);
   } finally {
     if (browser) {
       await browser.close().catch(() => undefined);
