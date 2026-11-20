@@ -1,0 +1,70 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  detectVerificationGate,
+  normalizePhoneKey,
+  parseAndDeduplicatePhones,
+  validateTargetUrl,
+} from './phoneQueue.ts';
+
+test('validateTargetUrl accepts valid http and https URLs', () => {
+  const httpsRes = validateTargetUrl('  https://example.com/submit?lang=ar  ');
+  assert.equal(httpsRes.valid, true);
+  assert.equal(httpsRes.normalizedUrl, 'https://example.com/submit?lang=ar');
+
+  const httpRes = validateTargetUrl('http://localhost:3000/test-form');
+  assert.equal(httpRes.valid, true);
+  assert.equal(httpRes.normalizedUrl, 'http://localhost:3000/test-form');
+});
+
+test('validateTargetUrl rejects empty, malformed, and non-http URLs', () => {
+  assert.equal(validateTargetUrl('').valid, false);
+  assert.equal(validateTargetUrl('   ').valid, false);
+  assert.equal(validateTargetUrl('not-a-url').valid, false);
+  assert.equal(validateTargetUrl('javascript:alert(1)').valid, false);
+  assert.equal(validateTargetUrl('ftp://example.com/file').valid, false);
+});
+
+test('normalizePhoneKey strips separators while preserving leading +', () => {
+  assert.equal(normalizePhoneKey(' +966 50-123 (4567) '), '+966501234567');
+  assert.equal(normalizePhoneKey('050 123 4567'), '0501234567');
+  assert.equal(normalizePhoneKey('   '), '');
+});
+
+test('parseAndDeduplicatePhones preserves order and removes duplicates within batch', () => {
+  const input = `
+    +966 50 111 2222
+    +966501112222
+    055-333-4444, 0553334444
+    0598887777; +966501112222
+  `;
+
+  const parsed = parseAndDeduplicatePhones(input);
+  assert.deepEqual(
+    parsed.queue.map((item) => item.normalizedKey),
+    ['+966501112222', '0553334444', '0598887777'],
+  );
+  assert.equal(parsed.skippedDuplicates, 3);
+  assert.equal(parsed.skippedAlreadyProcessed, 0);
+  assert.equal(parsed.totalInputTokens, 6);
+});
+
+test('parseAndDeduplicatePhones excludes previously processed numbers', () => {
+  const alreadyProcessed = new Set(['0501234567', '+966559998888']);
+  const input = '050 123 4567\n+966559998888\n0540001111';
+
+  const parsed = parseAndDeduplicatePhones(input, alreadyProcessed);
+  assert.deepEqual(
+    parsed.queue.map((item) => item.normalizedKey),
+    ['0540001111'],
+  );
+  assert.equal(parsed.skippedAlreadyProcessed, 2);
+  assert.equal(parsed.skippedDuplicates, 0);
+});
+
+test('detectVerificationGate flags captcha widgets or verification text', () => {
+  assert.equal(detectVerificationGate('Enter your phone number', false), false);
+  assert.equal(detectVerificationGate('Enter your phone number', true), true);
+  assert.equal(detectVerificationGate('Please verify you are human to continue', false), true);
+  assert.equal(detectVerificationGate('Checking your browser before accessing', false), true);
+});

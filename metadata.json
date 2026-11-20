@@ -1,0 +1,6 @@
+{
+  "name": "MediaTel SMS Automation",
+  "description": "نظام أتمتة لإدخال وإرسال أرقام الهواتف بالتتابع عبر نماذج الويب المصرح بها باستخدام Playwright مع تسجيل نتائج كل محاولة في جدول.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

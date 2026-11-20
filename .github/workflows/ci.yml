@@ -1,0 +1,70 @@
+name: CI Workflow
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Install Playwright Chromium
+        run: npx playwright install chromium --with-deps
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Run end-to-end Playwright automation check
+        run: |
+          NODE_ENV=production node server.ts &
+          SERVER_PID=$!
+          trap "kill $SERVER_PID 2>/dev/null || true" EXIT
+
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/test-form > /dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          node --input-type=module -e '
+            import assert from "node:assert/strict";
+            const res = await fetch("http://localhost:3000/api/automate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                url: "http://localhost:3000/test-form",
+                phones: "+966501234567\n+966501234567\nfail-123\n+966559876543"
+              })
+            });
+            assert.equal(res.status, 200);
+            const text = await res.text();
+            const events = text.trim().split("\n").map((line) => JSON.parse(line));
+            const results = events.filter((e) => e.type === "result");
+            assert.equal(results.length, 3, "Should process 3 unique numbers without duplicates");
+            assert.equal(results[0].status, "success");
+            assert.equal(results[1].status, "failed");
+            assert.equal(results[2].status, "success");
+            console.log("E2E Playwright automation verification passed:", results.map((r) => ({ phone: r.phone, status: r.status })));
+          '
