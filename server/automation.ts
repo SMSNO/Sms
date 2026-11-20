@@ -49,16 +49,35 @@ async function launchBrowser(): Promise<Browser> {
   });
 }
 
-async function findFirstVisibleLocator(candidates: Locator[]): Promise<Locator | null> {
+async function findFirstVisibleLocator(
+  candidates: Locator[],
+  requiredTag?: 'INPUT' | 'BUTTON',
+): Promise<Locator | null> {
   for (const candidate of candidates) {
     const count = await candidate.count().catch(() => 0);
     for (let i = 0; i < count; i += 1) {
       const nth = candidate.nth(i);
       const visible = await nth.isVisible().catch(() => false);
       const enabled = await nth.isEnabled().catch(() => false);
-      if (visible && enabled) {
-        return nth;
+      if (!visible || !enabled) {
+        continue;
       }
+      if (requiredTag) {
+        const tagMatches = await nth
+          .evaluate((el, tag) => {
+            if (el.tagName !== tag) return false;
+            if (tag === 'INPUT') {
+              const t = (el as HTMLInputElement).type.toLowerCase();
+              return !['hidden', 'submit', 'button', 'reset', 'checkbox', 'radio', 'file'].includes(t);
+            }
+            return true;
+          }, requiredTag)
+          .catch(() => false);
+        if (!tagMatches) {
+          continue;
+        }
+      }
+      return nth;
     }
   }
   return null;
@@ -75,12 +94,14 @@ async function locatePhoneInput(page: Page): Promise<Locator | null> {
     page.locator(
       'input[placeholder*="phone" i], input[placeholder*="mobile" i], input[placeholder*="هاتف"], input[placeholder*="جوال"], input[placeholder*="موبايل"], input[placeholder*="رقم"]',
     ),
-    page.getByLabel(/phone|mobile|tel|هاتف|جوال|موبايل|رقم/i),
+    page.getByRole('textbox', {
+      name: /phone|mobile|tel|هاتف|جوال|موبايل|رقم/i,
+    }),
     page.locator('form input[type="text"], form input:not([type])'),
     page.locator('input[type="text"], input:not([type])'),
   ];
 
-  return findFirstVisibleLocator(candidates);
+  return findFirstVisibleLocator(candidates, 'INPUT');
 }
 
 async function locateSubmitButton(page: Page, phoneInput: Locator): Promise<Locator | null> {
