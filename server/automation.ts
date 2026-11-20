@@ -107,39 +107,124 @@ async function locatePhoneInput(page: Page): Promise<Locator | null> {
   return findFirstVisibleLocator(candidates, 'INPUT');
 }
 
+async function isActionElementUsable(locator: Locator): Promise<boolean> {
+  const visible = await locator.isVisible().catch(() => false);
+  if (!visible) return false;
+  const enabled = await locator.isEnabled().catch(() => false);
+  if (!enabled) return false;
+
+  return locator
+    .evaluate((el) => {
+      if (el.getAttribute('aria-disabled') === 'true') return false;
+      if (el.hasAttribute('disabled')) return false;
+      const style = window.getComputedStyle(el);
+      if (style.pointerEvents === 'none' || style.visibility === 'hidden') return false;
+      return true;
+    })
+    .catch(() => false);
+}
+
+const NON_SUBMIT_BUTTON_PATTERN =
+  /^(close|back|cancel|clear|reset|skip|dismiss|decline|reject|accept all|menu|help|forgot|reset password|إغلاق|اغلاق|رجوع|عودة|إلغاء|الغاء|مسح|تخطي|رفض|قبول الكل|نسيت)$/i;
+
+const EXCLUDED_ACTION_CONTEXT_PATTERN =
+  /country|dial|calling\s*code|cookie|privacy|terms|policy|google|facebook|apple|twitter|microsoft|github|kakao|wechat|line\b|qr\s*code|passkey|forgot\s*password|use\s*email|use\s*username|الدولة|رمز الدولة|الخصوصية|ملفات تعريف|جوجل|فيسبوك|أبل|نسيت كلمة|بريد إلكتروني|اسم المستخدم/i;
+
+const COUNTRY_CODE_TEXT_PATTERN = /^(?:[A-Z]{2}\s*)?\+\d{1,4}$/;
+
+async function isExcludedNonSubmitButton(locator: Locator): Promise<boolean> {
+  const meta = await locator
+    .evaluate((el) => {
+      const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      const aria = (el.getAttribute('aria-label') || '').trim();
+      const title = (el.getAttribute('title') || '').trim();
+      const dataE2e = (el.getAttribute('data-e2e') || '').trim();
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      return { text, aria, title, dataE2e, type };
+    })
+    .catch(() => ({ text: '', aria: '', title: '', dataE2e: '', type: '' }));
+
+  if (meta.type === 'reset') return true;
+  if (meta.text && COUNTRY_CODE_TEXT_PATTERN.test(meta.text)) return true;
+
+  const combined = `${meta.text} ${meta.aria} ${meta.title} ${meta.dataE2e}`.trim();
+  if (meta.text && NON_SUBMIT_BUTTON_PATTERN.test(meta.text)) return true;
+  if (meta.aria && NON_SUBMIT_BUTTON_PATTERN.test(meta.aria)) return true;
+  if (combined && EXCLUDED_ACTION_CONTEXT_PATTERN.test(combined)) return true;
+
+  return false;
+}
+
+const ACTION_BUTTON_NAME_PATTERN =
+  /submit|send(\s*code)?|get\s*code|request\s*code|resend|verify|otp|continue|next|proceed|confirm|save|done|ok|go|start|log\s*in|login|sign\s*in|signin|sign\s*up|signup|register|إرسال(\s*الرمز)?|ارسال(\s*الرمز)?|أرسل(\s*الرمز)?|ارسل(\s*الرمز)?|طلب الرمز|الحصول على الرمز|متابعة|المتابعة|التالي|التالى|تأكيد|حفظ|تسجيل\s*الدخول|تسجيل|دخول|استمرار|موافق|ابدأ|تحقق/i;
+
+async function findFirstActionButtonInScope(
+  scope: Page | Locator,
+  phoneInputBox: { y: number } | null,
+): Promise<Locator | null> {
+  const prioritizedCandidates: Locator[] = [
+    scope.locator('button[type="submit"], input[type="submit"]'),
+    scope.getByRole('button', { name: ACTION_BUTTON_NAME_PATTERN }),
+    scope
+      .locator('button, [role="button"], input[type="button"], a[role="button"]')
+      .filter({ hasText: ACTION_BUTTON_NAME_PATTERN }),
+  ];
+
+  for (const candidate of prioritizedCandidates) {
+    const count = await candidate.count().catch(() => 0);
+    for (let i = 0; i < count; i += 1) {
+      const nth = candidate.nth(i);
+      if (!(await isActionElementUsable(nth))) continue;
+      if (await isExcludedNonSubmitButton(nth)) continue;
+      return nth;
+    }
+  }
+
+  // Fallback: pick any usable button/role="button" (preferring buttons positioned at or below the phone input)
+  const anyButtons = scope.locator(
+    'button, [role="button"], input[type="button"], input[type="submit"], a[role="button"]',
+  );
+  const total = await anyButtons.count().catch(() => 0);
+  const belowOrInline: Locator[] = [];
+  const above: Locator[] = [];
+
+  for (let i = 0; i < total; i += 1) {
+    const nth = anyButtons.nth(i);
+    if (!(await isActionElementUsable(nth))) continue;
+    if (await isExcludedNonSubmitButton(nth)) continue;
+
+    if (phoneInputBox) {
+      const box = await nth.boundingBox().catch(() => null);
+      if (box && box.y >= phoneInputBox.y - 16) {
+        belowOrInline.push(nth);
+      } else {
+        above.push(nth);
+      }
+    } else {
+      belowOrInline.push(nth);
+    }
+  }
+
+  return belowOrInline[0] ?? above[0] ?? null;
+}
+
 async function locateSubmitButton(page: Page, phoneInput: Locator): Promise<Locator | null> {
   const parentForm = phoneInput.locator('xpath=ancestor::form[1]');
   const hasParentForm = (await parentForm.count().catch(() => 0)) > 0;
   const parentDialog = phoneInput.locator('xpath=ancestor::*[@role="dialog"][1]');
   const hasParentDialog = (await parentDialog.count().catch(() => 0)) > 0;
+  const phoneInputBox = await phoneInput.boundingBox().catch(() => null);
 
-  const scope: Page | Locator = hasParentForm
-    ? parentForm
-    : hasParentDialog
-      ? parentDialog
-      : page;
+  const scopes: Array<Page | Locator> = [];
+  if (hasParentForm) scopes.push(parentForm);
+  if (hasParentDialog) scopes.push(parentDialog);
+  scopes.push(page);
 
-  const candidates: Locator[] = [
-    scope.locator('button[type="submit"], input[type="submit"]'),
-    scope.getByRole('button', {
-      name: /submit|send|continue|next|confirm|إرسال|ارسال|متابعة|تأكيد|حفظ/i,
-    }),
-    scope.locator('button:not([type="button"]):not([type="reset"])'),
-    scope.locator('button'),
-  ];
-
-  const foundInScope = await findFirstVisibleLocator(candidates);
-  if (foundInScope) {
-    return foundInScope;
-  }
-
-  if (hasParentForm || hasParentDialog) {
-    return findFirstVisibleLocator([
-      page.locator('button[type="submit"], input[type="submit"]'),
-      page.getByRole('button', {
-        name: /submit|send|continue|next|confirm|إرسال|ارسال|متابعة|تأكيد/i,
-      }),
-    ]);
+  for (const scope of scopes) {
+    const found = await findFirstActionButtonInScope(scope, phoneInputBox);
+    if (found) {
+      return found;
+    }
   }
 
   return null;
@@ -160,7 +245,7 @@ async function waitForPhoneInput(page: Page, timeoutMs = 6000): Promise<Locator 
 async function waitForSubmitButton(
   page: Page,
   phoneInput: Locator,
-  timeoutMs = 2000,
+  timeoutMs = 3500,
 ): Promise<Locator | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -168,7 +253,7 @@ async function waitForSubmitButton(
     if (button) {
       return button;
     }
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(250);
   }
   return locateSubmitButton(page, phoneInput);
 }
@@ -246,12 +331,12 @@ async function selectCountryCodeIfPresent(
     }
   }
 
-  // 3) Custom country-code picker button (e.g. button[aria-label*="country"] or button with +XX)
+  // 3) Custom country-code picker button (e.g. button/[role="button"] with country label or +XX)
   const countryBtnCandidates: Locator[] = [
     scope.locator(
-      'button[aria-label*="country" i], button[aria-label*="dial" i], button[aria-label*="code" i], button[aria-label*="الدولة"]',
+      'button[aria-label*="country" i], button[aria-label*="dial" i], button[aria-label*="code" i], button[aria-label*="الدولة"], [role="button"][aria-label*="country" i], [role="button"][aria-label*="dial" i]',
     ),
-    scope.locator('button').filter({ hasText: /\+\d{1,3}\b/ }),
+    scope.locator('button, [role="button"]').filter({ hasText: /\+\d{1,3}\b/ }),
   ];
 
   let countryBtn: Locator | null = null;
@@ -488,11 +573,18 @@ async function processSingleNumber(
     await activePhoneInput.click({ timeout: 5000 });
     await activePhoneInput.fill(valueToFill, { timeout: 5000 });
 
-    const submitButton = await waitForSubmitButton(page, activePhoneInput, 2000);
+    let submitButton = await waitForSubmitButton(page, activePhoneInput, 1200);
+    if (!submitButton) {
+      // Some React/SPA masked inputs only enable the action button on real key events
+      await activePhoneInput.fill('', { timeout: 3000 }).catch(() => undefined);
+      await activePhoneInput.pressSequentially(valueToFill, { delay: 30 }).catch(() => undefined);
+      submitButton = await waitForSubmitButton(page, activePhoneInput, 2500);
+    }
+
     if (!submitButton) {
       return {
         status: 'failed',
-        details: 'تعذر العثور على زر إرسال مفعّل بعد إدخال الرقم (قد يرفض النموذج صيغة الرقم أو يتطلب اختيار رمز الدولة).',
+        details: 'تعذر العثور على زر إجراء مفعّل بعد إدخال الرقم (قد يرفض النموذج صيغة الرقم أو يتطلب اختيار رمز الدولة أو إكمال خطوة إضافية).',
       };
     }
 

@@ -105,4 +105,21 @@ jobs:
             assert.equal(countryResults[1].status, "success");
             assert.ok(countryResults[1].details.includes("+966") && countryResults[1].details.includes("501234567"));
             console.log("Country-code E2E verification passed:", countryResults.map((r) => ({ phone: r.phone, details: r.details })));
+
+            const loginRes = await fetch("http://localhost:3000/api/automate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                url: "http://localhost:3000/test-form-login",
+                phones: "+201208546652",
+                delayMs: 0
+              })
+            });
+            assert.equal(loginRes.status, 200);
+            const loginText = await loginRes.text();
+            const loginResults = loginText.trim().split("\n").map((line) => JSON.parse(line)).filter((e) => e.type === "result");
+            assert.equal(loginResults.length, 1);
+            assert.equal(loginResults[0].status, "success");
+            assert.ok(loginResults[0].details.includes("تم تسجيل الدخول بالرقم"));
+            console.log("Login button E2E verification passed:", loginResults.map((r) => ({ phone: r.phone, details: r.details })));
           '

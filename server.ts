@@ -151,6 +151,42 @@ app.get('/test-form-country', (_req, res) => {
 </html>`);
 });
 
+app.get('/test-form-login', (_req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <title>نموذج اختبار تسجيل الدخول</title>
+  </head>
+  <body>
+    <main>
+      <button type="button" aria-label="Close">Close</button>
+      <button type="button">Continue with Google</button>
+      <div>
+        <input id="login-phone" type="text" placeholder="رقم الهاتف" />
+      </div>
+      <div id="login-btn" role="button" tabindex="0" aria-disabled="true">تسجيل الدخول</div>
+      <div id="login-feedback"></div>
+    </main>
+    <script>
+      const inp = document.getElementById('login-phone');
+      const btn = document.getElementById('login-btn');
+      const fb = document.getElementById('login-feedback');
+      inp.addEventListener('input', () => {
+        btn.setAttribute('aria-disabled', inp.value.trim().length >= 5 ? 'false' : 'true');
+      });
+      btn.addEventListener('click', () => {
+        if (btn.getAttribute('aria-disabled') === 'true') return;
+        fb.setAttribute('role', 'status');
+        fb.setAttribute('data-status', 'success');
+        fb.textContent = 'تم تسجيل الدخول بالرقم ' + inp.value.trim();
+      });
+    </script>
+  </body>
+</html>`);
+});
+
 app.post('/api/automate', async (req, res) => {
   const rawUrl = typeof req.body?.url === 'string' ? req.body.url : '';
   const rawPhones = typeof req.body?.phones === 'string' ? req.body.phones : '';
