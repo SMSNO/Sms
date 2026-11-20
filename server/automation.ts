@@ -257,10 +257,15 @@ async function selectCountryCodeIfPresent(
     const count = await candidate.count().catch(() => 0);
     for (let i = 0; i < count; i += 1) {
       const nth = candidate.nth(i);
-      if ((await nth.isVisible().catch(() => false)) && (await nth.isEnabled().catch(() => false))) {
-        countryBtn = nth;
-        break;
+      if (!(await nth.isVisible().catch(() => false)) || !(await nth.isEnabled().catch(() => false))) {
+        continue;
       }
+      const labelAndText = `${await nth.getAttribute('aria-label').catch(() => '') || ''} ${await nth.innerText().catch(() => '')}`.trim();
+      if (/^(close|back|next|submit|إغلاق|رجوع|التالي)$/i.test(labelAndText)) {
+        continue;
+      }
+      countryBtn = nth;
+      break;
     }
     if (countryBtn) break;
   }
@@ -277,52 +282,77 @@ async function selectCountryCodeIfPresent(
   await countryBtn.click({ timeout: 3000 }).catch(() => undefined);
   await page.waitForTimeout(300);
 
-  // Find matching country item across dialog or page popover first (avoids filtering out dial codes if search only matches names)
-  const searchScope: Page | Locator = hasParentDialog ? parentDialog : page;
-  const findCountryOption = async (): Promise<Locator | null> => {
-    const optionCandidates = searchScope.locator(
-      'button, [role="option"], [role="menuitem"], li',
-    );
-    const optCount = await optionCandidates.count().catch(() => 0);
-    let fallbackMatch: Locator | null = null;
+  // Do NOT anchor searchScope to phoneInput because opening the country list may unmount phoneInput.
+  const activeDialog = page.locator('[role="dialog"]').last();
+  const hasVisibleDialog =
+    (await activeDialog.count().catch(() => 0)) > 0 &&
+    (await activeDialog.isVisible().catch(() => false));
+  const searchScopes: Array<Page | Locator> = hasVisibleDialog ? [activeDialog, page] : [page];
 
-    for (let i = 0; i < optCount; i += 1) {
-      const opt = optionCandidates.nth(i);
-      const visible = await opt.isVisible().catch(() => false);
-      if (!visible) continue;
-      const text = (await opt.innerText().catch(() => '')).trim();
-      if (!text || !exactDialRegex.test(text)) continue;
+  const findCountryOptionIn = async (root: Page | Locator): Promise<Locator | null> => {
+    for (const selector of ['button, [role="option"], [role="menuitem"]', 'li']) {
+      const filtered = root.locator(selector).filter({ hasText: exactDialRegex });
+      const optCount = await filtered.count().catch(() => 0);
+      let fallbackMatch: Locator | null = null;
 
-      if (preferredCountryName && text.toLowerCase().includes(preferredCountryName.toLowerCase())) {
-        return opt;
+      for (let i = 0; i < optCount; i += 1) {
+        const opt = filtered.nth(i);
+        const visible = await opt.isVisible().catch(() => false);
+        if (!visible) continue;
+        const text = (await opt.innerText().catch(() => '')).trim();
+        if (!text || !exactDialRegex.test(text)) continue;
+
+        // Skip giant container nodes that bundle multiple country codes
+        const codeMatches = text.match(/\+\d{1,3}/g);
+        if (codeMatches && codeMatches.length > 2) continue;
+
+        if (preferredCountryName && text.toLowerCase().includes(preferredCountryName.toLowerCase())) {
+          return opt;
+        }
+
+        if (!fallbackMatch) {
+          fallbackMatch = opt;
+        }
       }
 
-      if (!fallbackMatch) {
-        fallbackMatch = opt;
+      if (fallbackMatch) {
+        return fallbackMatch;
       }
     }
-    return fallbackMatch;
+    return null;
+  };
+
+  const findCountryOption = async (): Promise<Locator | null> => {
+    for (const root of searchScopes) {
+      const found = await findCountryOptionIn(root);
+      if (found) return found;
+    }
+    return null;
   };
 
   let matchedOption = await findCountryOption();
 
   if (!matchedOption) {
-    const searchInput = searchScope
-      .locator(
-        'input[type="search"], input[name*="search" i], input[placeholder*="search" i], input[aria-label*="search" i], input[placeholder*="بحث"]',
-      )
-      .first();
-    if ((await searchInput.count().catch(() => 0)) > 0 && (await searchInput.isVisible().catch(() => false))) {
-      const searchQuery = preferredCountryName || countryCode;
-      await searchInput.fill(searchQuery, { timeout: 2000 }).catch(() => undefined);
-      await page.waitForTimeout(250);
-      matchedOption = await findCountryOption();
+    for (const root of searchScopes) {
+      const searchInput = root
+        .locator(
+          'input[type="search"], input[name*="search" i], input[placeholder*="search" i], input[aria-label*="search" i], input[placeholder*="بحث"]',
+        )
+        .first();
+      if ((await searchInput.count().catch(() => 0)) > 0 && (await searchInput.isVisible().catch(() => false))) {
+        const searchQuery = preferredCountryName || countryCode;
+        await searchInput.fill(searchQuery, { timeout: 2000 }).catch(() => undefined);
+        await page.waitForTimeout(250);
+        matchedOption = await findCountryOption();
+        if (matchedOption) break;
+      }
     }
   }
 
   if (matchedOption) {
+    await matchedOption.scrollIntoViewIfNeeded().catch(() => undefined);
     await matchedOption.click({ timeout: 3000 }).catch(() => undefined);
-    await page.waitForTimeout(250);
+    await page.waitForTimeout(300);
     return true;
   }
 
@@ -433,11 +463,23 @@ async function processSingleNumber(
       );
       if (countryHandled) {
         valueToFill = parsedPhone.nationalNumber;
-        // Re-locate phone input in case selecting country code re-mounted the form/dialog
-        const refreshed = await waitForPhoneInput(page, 3000);
-        if (refreshed) {
-          activePhoneInput = refreshed;
+        const refreshed = await waitForPhoneInput(page, 4000);
+        if (!refreshed) {
+          return {
+            status: 'failed',
+            details: `تم اختيار كود الدولة (${parsedPhone.countryCode}) لكن تعذر العودة إلى خانة إدخال رقم الهاتف.`,
+          };
         }
+        activePhoneInput = refreshed;
+      } else if (!(await activePhoneInput.isVisible().catch(() => false))) {
+        const refreshed = await waitForPhoneInput(page, 2000);
+        if (!refreshed) {
+          return {
+            status: 'failed',
+            details: `تعذر تحديد كود الدولة (${parsedPhone.countryCode}) في قائمة الصفحة.`,
+          };
+        }
+        activePhoneInput = refreshed;
       }
     }
 
