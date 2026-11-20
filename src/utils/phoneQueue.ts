@@ -96,10 +96,34 @@ export function parseAndDeduplicatePhones(
   rawInput: string,
   alreadyProcessedKeys: ReadonlySet<string> = new Set(),
 ): ParsedPhoneQueue {
-  const tokens = rawInput
+  const rawSegments = rawInput
     .split(/[\r\n,;]+/)
     .map((item) => item.trim())
-    .filter((item) => item.length > 0);
+    .filter((item) => item.length > 0 && !item.startsWith('#'));
+
+  const tokens: string[] = [];
+  for (const segment of rawSegments) {
+    // If newlines were stripped by a single-line input (e.g. +2012...+2010... or "+2012... +2010..."),
+    // split at each '+' prefix when multiple '+' signs appear in the same segment.
+    const plusCount = (segment.match(/\+/g) || []).length;
+    if (plusCount > 1) {
+      const splitByPlus = segment
+        .split(/(?=\+)/)
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0);
+      tokens.push(...splitByPlus);
+      continue;
+    }
+
+    // If newlines were converted to spaces between standalone full numbers (each >= 7 digits), split them.
+    const wsParts = segment.split(/\s+/).filter(Boolean);
+    if (wsParts.length > 1 && wsParts.every((part) => part.replace(/\D/g, '').length >= 7)) {
+      tokens.push(...wsParts);
+      continue;
+    }
+
+    tokens.push(segment);
+  }
 
   const seenInBatch = new Set<string>();
   const queue: Array<{ phone: string; normalizedKey: string }> = [];

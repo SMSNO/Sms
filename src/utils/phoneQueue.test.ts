@@ -63,6 +63,30 @@ test('parseAndDeduplicatePhones excludes previously processed numbers', () => {
   assert.equal(parsed.skippedDuplicates, 0);
 });
 
+test('parseAndDeduplicatePhones splits flattened + and space-separated full numbers and ignores comments', () => {
+  const input = [
+    '# تعليق تجريبي',
+    '+201208546652+201012345678 +966501234567',
+    '01208546652 01122334455',
+    '+20 120 854 6652',
+  ].join('\n');
+
+  const parsed = parseAndDeduplicatePhones(input);
+  assert.deepEqual(
+    parsed.queue.map((item) => item.normalizedKey),
+    ['+201208546652', '+201012345678', '+966501234567', '01208546652', '01122334455'],
+  );
+  assert.equal(parsed.skippedDuplicates, 1);
+});
+
+test('parseAndDeduplicatePhones supports batches exceeding 300 phone numbers', () => {
+  const lines = Array.from({ length: 350 }, (_, i) => `+20120${String(100000 + i)}`);
+  const parsed = parseAndDeduplicatePhones(lines.join('\n'));
+  assert.equal(parsed.queue.length, 350);
+  assert.equal(parsed.queue[0].phone, '+20120100000');
+  assert.equal(parsed.queue[349].phone, '+20120100349');
+});
+
 test('detectVerificationGate flags captcha widgets or verification text', () => {
   assert.equal(detectVerificationGate('Enter your phone number', false), false);
   assert.equal(detectVerificationGate('Enter your phone number', true), true);

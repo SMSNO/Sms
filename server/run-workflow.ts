@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { runSequentialAutomation, type AutomationUpdate } from './automation.ts';
 import { parseAndDeduplicatePhones, validateTargetUrl } from '../src/utils/phoneQueue.ts';
 
@@ -21,7 +22,16 @@ function escapeMarkdownCell(value: string): string {
 
 async function main() {
   const rawUrl = (process.env.TARGET_URL || '').trim();
-  const rawPhones = (process.env.PHONE_NUMBERS || '').trim();
+  let rawPhones = (process.env.PHONE_NUMBERS || '').trim();
+  let phoneSource = 'workflow input';
+
+  if (!rawPhones) {
+    const phonesFilePath = path.resolve(process.cwd(), process.env.PHONES_FILE || 'phones.txt');
+    if (fs.existsSync(phonesFilePath)) {
+      rawPhones = fs.readFileSync(phonesFilePath, 'utf8').trim();
+      phoneSource = path.basename(phonesFilePath);
+    }
+  }
 
   const urlCheck = validateTargetUrl(rawUrl);
   if (!urlCheck.valid || !urlCheck.normalizedUrl) {
@@ -31,13 +41,15 @@ async function main() {
 
   const parsed = parseAndDeduplicatePhones(rawPhones);
   if (parsed.queue.length === 0) {
-    console.error('No phone numbers provided in PHONE_NUMBERS.');
+    console.error(
+      'No phone numbers provided. Enter numbers in phone_numbers or add them line-by-line to phones.txt.',
+    );
     process.exit(1);
   }
 
   console.log(`Target URL: ${urlCheck.normalizedUrl}`);
   console.log(
-    `Processing ${parsed.queue.length} unique numbers (skipped duplicates: ${parsed.skippedDuplicates})`,
+    `Source: ${phoneSource} | Processing ${parsed.queue.length} unique numbers (skipped duplicates: ${parsed.skippedDuplicates})`,
   );
 
   const items = parsed.queue.map((item, idx) => ({
@@ -49,52 +61,55 @@ async function main() {
   const results = new Map<number, AutomationUpdate>();
   const abortController = new AbortController();
 
-  await runSequentialAutomation({
-    targetUrl: urlCheck.normalizedUrl,
-    items,
-    signal: abortController.signal,
-    onUpdate: (update) => {
-      if (update.status === 'success' || update.status === 'failed') {
-        results.set(update.index, update);
-        console.log(
-          `[${update.index}/${items.length}] ${update.phone} -> ${statusLabel(update.status)} | ${update.details} (${update.timestamp})`,
-        );
-      }
-    },
-  });
+  try {
+    await runSequentialAutomation({
+      targetUrl: urlCheck.normalizedUrl,
+      items,
+      signal: abortController.signal,
+      onUpdate: (update) => {
+        if (update.status === 'success' || update.status === 'failed') {
+          results.set(update.index, update);
+          console.log(
+            `[${update.index}/${items.length}] ${update.phone} -> ${statusLabel(update.status)} | ${update.details} (${update.timestamp})`,
+          );
+        }
+      },
+    });
+  } finally {
+    const rows = items.map((item) => {
+      const res = results.get(item.index);
+      return {
+        index: item.index,
+        phone: item.phone,
+        status: res ? statusLabel(res.status) : 'فشل (Failed)',
+        details: res?.details || 'لم تكتمل المحاولة',
+        timestamp: res?.timestamp || '-',
+      };
+    });
 
-  const rows = items.map((item) => {
-    const res = results.get(item.index);
-    return {
-      index: item.index,
-      phone: item.phone,
-      status: res ? statusLabel(res.status) : 'فشل (Failed)',
-      details: res?.details || 'لم تكتمل المحاولة',
-      timestamp: res?.timestamp || '-',
-    };
-  });
+    const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+    if (summaryPath) {
+      const successCount = Array.from(results.values()).filter((r) => r.status === 'success').length;
+      const failedCount = rows.length - successCount;
 
-  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
-  if (summaryPath) {
-    const successCount = Array.from(results.values()).filter((r) => r.status === 'success').length;
-    const failedCount = rows.length - successCount;
+      const markdownLines = [
+        '## نتائج أتمتة إرسال أرقام الهواتف',
+        '',
+        `- **الرابط:** ${urlCheck.normalizedUrl}`,
+        `- **المصدر:** ${phoneSource}`,
+        `- **الإجمالي:** ${rows.length} | **نجح:** ${successCount} | **فشل:** ${failedCount} | **مكررة مستبعدة:** ${parsed.skippedDuplicates}`,
+        '',
+        '| # | رقم الهاتف | الحالة | التفاصيل | الوقت |',
+        '| --- | --- | --- | --- | --- |',
+        ...rows.map(
+          (r) =>
+            `| ${r.index} | \`${escapeMarkdownCell(r.phone)}\` | ${escapeMarkdownCell(r.status)} | ${escapeMarkdownCell(r.details)} | ${escapeMarkdownCell(r.timestamp)} |`,
+        ),
+        '',
+      ];
 
-    const markdownLines = [
-      '## نتائج أتمتة إرسال أرقام الهواتف',
-      '',
-      `- **الرابط:** ${urlCheck.normalizedUrl}`,
-      `- **الإجمالي:** ${rows.length} | **نجح:** ${successCount} | **فشل:** ${failedCount} | **مكررة مستبعدة:** ${parsed.skippedDuplicates}`,
-      '',
-      '| # | رقم الهاتف | الحالة | التفاصيل | الوقت |',
-      '| --- | --- | --- | --- | --- |',
-      ...rows.map(
-        (r) =>
-          `| ${r.index} | \`${escapeMarkdownCell(r.phone)}\` | ${escapeMarkdownCell(r.status)} | ${escapeMarkdownCell(r.details)} | ${escapeMarkdownCell(r.timestamp)} |`,
-      ),
-      '',
-    ];
-
-    fs.appendFileSync(summaryPath, markdownLines.join('\n'), 'utf8');
+      fs.appendFileSync(summaryPath, markdownLines.join('\n'), 'utf8');
+    }
   }
 }
 

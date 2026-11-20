@@ -12,13 +12,14 @@ on:
         required: false
         type: string
       phone_numbers:
-        description: 'قائمة أرقام الهواتف (مفصولة بفاصلة , أو فاصلة منقوطة ; أو سطر جديد)'
+        description: 'أرقام الهواتف (أو اتركها فارغة للقراءة من ملف phones.txt في المستودع الذي يسع لأكثر من 300 رقم كل رقم بسطر)'
         required: false
         type: string
 
 jobs:
   run-automation-and-checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repository

@@ -80,13 +80,13 @@ export function AutomationForm({
           <textarea
             id="phone-list-input"
             name="phoneList"
-            rows={9}
+            rows={13}
             dir="ltr"
             value={phonesText}
             onChange={(e) => onPhonesChange(e.target.value)}
             disabled={isRunning}
             placeholder={'+966501234567\n+966559876543\n0541112233'}
-            className="w-full rounded-md border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-700/15 disabled:bg-slate-50 disabled:text-slate-500 resize-y"
+            className="w-full min-h-[280px] rounded-md border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-mono text-slate-900 placeholder:text-slate-400 focus:border-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-700/15 disabled:bg-slate-50 disabled:text-slate-500 resize-y"
           />
           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-600 tabular-nums">
             <span>أرقام جاهزة للمعالجة: {uniquePendingCount}</span>
