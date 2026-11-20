@@ -194,13 +194,36 @@ async function processSingleNumber(
   targetUrl: string,
   phone: string,
 ): Promise<{ status: 'success' | 'failed'; details: string }> {
-  let lastHttpErrorStatus: number | null = null;
+  const httpErrors: Array<{ status: number; host: string }> = [];
+
+  const ignoredTrackerHosts = [
+    'google-analytics.com',
+    'googletagmanager.com',
+    'doubleclick.net',
+    'facebook.net',
+    'connect.facebook.net',
+    'sentry.io',
+    'datadoghq.com',
+    'amplitude.com',
+    'segment.io',
+    'branch.io',
+    'appsflyer.com',
+  ];
 
   const responseListener = (response: { url: () => string; status: () => number; request: () => { method: () => string } }) => {
     const status = response.status();
     const method = response.request().method();
     if (status >= 400 && (method === 'POST' || method === 'PUT' || response.url() === targetUrl)) {
-      lastHttpErrorStatus = status;
+      let host = '';
+      try {
+        host = new URL(response.url()).hostname;
+      } catch {
+        host = '';
+      }
+      if (host && ignoredTrackerHosts.some((ignored) => host.endsWith(ignored))) {
+        return;
+      }
+      httpErrors.push({ status, host });
     }
   };
 
@@ -248,7 +271,7 @@ async function processSingleNumber(
       };
     }
 
-    lastHttpErrorStatus = null;
+    httpErrors.length = 0;
     const submitResponsePromise = page
       .waitForResponse(
         (response) =>
@@ -289,7 +312,7 @@ async function processSingleNumber(
 
     // Inspect explicit alert / error feedback on the page before HTTP fallback
     const errorLocator = page
-      .locator('[role="alert"][data-status="error"], .error-message, .form-error, [aria-invalid="true"]')
+      .locator('[role="alert"]:not([aria-label*="Privacy" i]):not([aria-label*="Cookie" i]), .error-message, .form-error, [aria-invalid="true"]')
       .first();
     if ((await errorLocator.count().catch(() => 0)) > 0) {
       const visible = await errorLocator.isVisible().catch(() => false);
@@ -304,10 +327,13 @@ async function processSingleNumber(
       }
     }
 
-    if (lastHttpErrorStatus !== null) {
+    const lastErr = httpErrors.at(-1);
+    if (lastErr) {
       return {
         status: 'failed',
-        details: `فشل إرسال الطلب من الخادم (رمز ${lastHttpErrorStatus}).`,
+        details: lastErr.host
+          ? `رفض الخادم الطلب (رمز ${lastErr.status} - ${lastErr.host}).`
+          : `فشل إرسال الطلب من الخادم (رمز ${lastErr.status}).`,
       };
     }
 
