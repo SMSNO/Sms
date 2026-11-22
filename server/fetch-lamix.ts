@@ -275,7 +275,8 @@ async function main() {
 
   const customApiUrl = (process.env.LAMIX_API_URL || '').trim();
   const phonesFilePath = path.resolve(process.cwd(), process.env.PHONES_FILE || 'phones.txt');
-  const fetchAll = process.env.LAMIX_FETCH_ALL === 'true';
+  const replaceMode = process.env.LAMIX_REPLACE === 'true';
+  const fetchAll = process.env.LAMIX_FETCH_ALL === 'true' || replaceMode;
   const maxPages = Math.max(1, Number(process.env.LAMIX_MAX_PAGES || 100) || 100);
   const pageLimit = Math.max(10, Number(process.env.LAMIX_PAGE_LIMIT || 500) || 500);
 
@@ -283,7 +284,8 @@ async function main() {
     ? fs.readFileSync(phonesFilePath, 'utf8')
     : '';
 
-  const initialMerge = mergePhonesIntoList(existingContent, []);
+  const baseContentForMerge = replaceMode ? '' : existingContent;
+  const initialMerge = mergePhonesIntoList(baseContentForMerge, []);
   const existingKeys = new Set(initialMerge.mergedPhones.map((p) => normalizePhoneKey(p)));
 
   const endpoints = customApiUrl
@@ -314,14 +316,14 @@ async function main() {
     });
   }
 
-  const result = mergePhonesIntoList(existingContent, allFetchedPhones, { newestFirst: true });
+  const result = mergePhonesIntoList(baseContentForMerge, allFetchedPhones, { newestFirst: true });
 
   if (result.updatedContent !== existingContent) {
     fs.writeFileSync(phonesFilePath, result.updatedContent, 'utf8');
   }
 
   console.log(
-    `Lamix sync complete | Extracted: ${allFetchedPhones.length} | Newly added: ${result.addedPhones.length} | Total unique in ${path.basename(phonesFilePath)}: ${result.mergedPhones.length}`,
+    `Lamix sync complete (${replaceMode ? 'replace' : 'merge'}) | Extracted: ${allFetchedPhones.length} | Newly added: ${result.addedPhones.length} | Total unique in ${path.basename(phonesFilePath)}: ${result.mergedPhones.length}`,
   );
 }
 

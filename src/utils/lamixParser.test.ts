@@ -95,4 +95,10 @@ test('mergePhonesIntoList adds only new unique numbers with + prefix and preserv
     merged.updatedContent,
     '+201208546652\n+966501234567\n+59161356379\n+59161356593\n',
   );
+
+  // Replace mode starts from empty existing content so stale numbers are dropped
+  const replaced = mergePhonesIntoList('', ['201000022740', '+201000022740', '93700001978']);
+  assert.deepEqual(replaced.mergedPhones, ['+201000022740', '+93700001978']);
+  assert.equal(replaced.skippedDuplicates, 1);
+  assert.equal(replaced.updatedContent, '+201000022740\n+93700001978\n');
 });

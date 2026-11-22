@@ -16,10 +16,15 @@ on:
         required: false
         type: string
       sync_all_lamix:
-        description: 'جلب كل الأرقام من Lamix بالكامل (اتركه معطلاً لجلب الأحدث فقط في كل تشغيل)'
+        description: 'جلب كل الأرقام من حسابك في Lamix بالكامل قبل التشغيل'
         required: false
         type: boolean
-        default: false
+        default: true
+      replace_phones:
+        description: 'مسح محتويات phones.txt السابقة واستبدالها بأرقام حسابك الحالية فقط'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -58,6 +63,7 @@ jobs:
         env:
           LAMIX: ${{ secrets.LAMIX }}
           LAMIX_FETCH_ALL: ${{ inputs.sync_all_lamix }}
+          LAMIX_REPLACE: ${{ inputs.replace_phones }}
         run: |
           npx tsx server/fetch-lamix.ts
           if [ -n "$(git status --porcelain phones.txt)" ]; then
