@@ -77,6 +77,27 @@ function sanitizeUrlForLog(rawUrl: string): string {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(response: Response, bodyText: string): number {
+  const retryHeader = response.headers.get('retry-after');
+  if (retryHeader && /^\d+(\.\d+)?$/.test(retryHeader.trim())) {
+    return Math.min(15_000, Math.max(1_000, Math.ceil(Number(retryHeader.trim()) * 1000) + 300));
+  }
+  try {
+    const parsed = JSON.parse(bodyText) as { retryAfterSeconds?: unknown; retry_after?: unknown };
+    const secs = Number(parsed.retryAfterSeconds ?? parsed.retry_after);
+    if (Number.isFinite(secs) && secs > 0) {
+      return Math.min(15_000, Math.max(1_000, Math.ceil(secs * 1000) + 300));
+    }
+  } catch {
+    // ignore JSON parse failure
+  }
+  return 1_500;
+}
+
 async function fetchJsonPage(
   pageUrl: string,
   token: string,
@@ -86,27 +107,38 @@ async function fetchJsonPage(
   let lastError = 'Unknown error';
 
   for (const strategy of strategies) {
-    const { url, headers } = strategy.buildRequest(pageUrl, token);
-    const response = await fetch(url, { headers });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const { url, headers } = strategy.buildRequest(pageUrl, token);
+      const response = await fetch(url, { headers });
 
-    if (response.ok) {
-      const contentType = response.headers.get('content-type') || '';
-      if (!contentType.includes('application/json') && !contentType.includes('+json')) {
-        const textSample = (await response.text()).slice(0, 120);
-        throw new Error(
-          `Expected JSON from ${sanitizeUrlForLog(pageUrl)} but received "${contentType}" (${textSample})`,
-        );
+      if (response.ok) {
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json') && !contentType.includes('+json')) {
+          const textSample = (await response.text()).slice(0, 120);
+          throw new Error(
+            `Expected JSON from ${sanitizeUrlForLog(pageUrl)} but received "${contentType}" (${textSample})`,
+          );
+        }
+        const payload = await response.json();
+        return { payload, strategy };
       }
-      const payload = await response.json();
-      return { payload, strategy };
-    }
 
-    const bodySnippet = (await response.text().catch(() => '')).slice(0, 160);
-    lastError = `HTTP ${response.status} via ${strategy.name}: ${bodySnippet}`;
+      const bodyText = await response.text().catch(() => '');
+      const bodySnippet = bodyText.slice(0, 160);
+      lastError = `HTTP ${response.status} via ${strategy.name}: ${bodySnippet}`;
 
-    // Retry with next auth header/query strategy only on authentication failures
-    if (response.status !== 401 && response.status !== 403) {
-      throw new Error(`Lamix API request failed (${lastError})`);
+      if (response.status === 429 && attempt < 2) {
+        const waitMs = parseRetryAfterMs(response, bodyText);
+        console.log(`Lamix rate limit (429); waiting ${waitMs}ms as requested before retrying...`);
+        await sleep(waitMs);
+        continue;
+      }
+
+      // Retry with next auth header/query strategy only on authentication failures
+      if (response.status !== 401 && response.status !== 403) {
+        throw new Error(`Lamix API request failed (${lastError})`);
+      }
+      break;
     }
   }
 
@@ -155,6 +187,9 @@ async function main() {
   const seenThisSync = new Set<string>();
 
   while (nextUrl && pageIndex <= maxPages) {
+    if (pageIndex > 1) {
+      await sleep(1_200);
+    }
     const { payload, strategy } = await fetchJsonPage(nextUrl, token, lockedStrategy);
     lockedStrategy = strategy;
 
