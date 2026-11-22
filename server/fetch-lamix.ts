@@ -145,9 +145,12 @@ async function fetchJsonPage(
   throw new Error(`Lamix API authentication failed (${lastError})`);
 }
 
-function buildPageUrl(baseUrl: string, pageNumber: number, limit: number): string {
+function buildPageUrl(baseUrl: string, pageNumber: number, limit: number, afterCursor?: string | null): string {
   const parsed = new URL(baseUrl);
-  if (pageNumber > 1) {
+  if (afterCursor) {
+    parsed.searchParams.delete('page');
+    parsed.searchParams.set('after', afterCursor);
+  } else if (pageNumber > 1) {
     parsed.searchParams.set('page', String(pageNumber));
   }
   if (!parsed.searchParams.has('limit') && !parsed.searchParams.has('per_page')) {
@@ -156,38 +159,38 @@ function buildPageUrl(baseUrl: string, pageNumber: number, limit: number): strin
   return parsed.toString();
 }
 
-async function main() {
-  const token = (process.env.LAMIX || process.env.LAMIX_API_KEY || '').trim();
-  if (!token) {
-    if (process.env.REQUIRE_LAMIX === 'true') {
-      console.error('LAMIX secret is missing.');
-      process.exit(1);
-    }
-    console.log('LAMIX secret not configured; skipping API fetch.');
-    return;
-  }
+async function fetchEndpointPhones(options: {
+  endpointUrl: string;
+  label: string;
+  token: string;
+  fetchAll: boolean;
+  maxPages: number;
+  pageLimit: number;
+  existingKeys: ReadonlySet<string>;
+  seenThisSync: Set<string>;
+  allFetchedPhones: string[];
+  lockedStrategy: AuthStrategy | null;
+}): Promise<AuthStrategy | null> {
+  const {
+    endpointUrl,
+    label,
+    token,
+    fetchAll,
+    maxPages,
+    pageLimit,
+    existingKeys,
+    seenThisSync,
+    allFetchedPhones,
+  } = options;
+  let { lockedStrategy } = options;
 
-  const baseUrl = (process.env.LAMIX_API_URL || 'https://panel.lamix.org/api/v1/messages').trim();
-  const phonesFilePath = path.resolve(process.cwd(), process.env.PHONES_FILE || 'phones.txt');
-  const fetchAll = process.env.LAMIX_FETCH_ALL === 'true';
-  const maxPages = Math.max(1, Number(process.env.LAMIX_MAX_PAGES || 100) || 100);
-  const pageLimit = Math.max(10, Number(process.env.LAMIX_PAGE_LIMIT || 100) || 100);
-
-  const existingContent = fs.existsSync(phonesFilePath)
-    ? fs.readFileSync(phonesFilePath, 'utf8')
-    : '';
-
-  const initialMerge = mergePhonesIntoList(existingContent, []);
-  const existingKeys = new Set(initialMerge.mergedPhones.map((p) => normalizePhoneKey(p)));
-
-  let lockedStrategy: AuthStrategy | null = null;
-  let nextUrl: string | null = buildPageUrl(baseUrl, 1, pageLimit);
+  let nextUrl: string | null = buildPageUrl(endpointUrl, 1, pageLimit);
   let pageIndex = 1;
-  const allFetchedPhones: string[] = [];
-  const seenThisSync = new Set<string>();
+  let usedCursorPagination = false;
+  const seenCursors = new Set<string>();
 
   while (nextUrl && pageIndex <= maxPages) {
-    if (pageIndex > 1) {
+    if (pageIndex > 1 || seenThisSync.size > 0) {
       await sleep(1_200);
     }
     const { payload, strategy } = await fetchJsonPage(nextUrl, token, lockedStrategy);
@@ -210,41 +213,105 @@ async function main() {
     }
 
     console.log(
-      `Page ${pageIndex} (${strategy.name}): raw=${extracted.rawItemCount}, phones=${extracted.phones.length}, new=${newOnThisPage}, hasMore=${extracted.hasMore}, page=${extracted.currentPage ?? '?'}/${extracted.lastPage ?? '?'}, total=${extracted.totalCount ?? '?'}, perPage=${extracted.perPage ?? '?'}.`,
+      `[${label}] Page ${pageIndex} (${strategy.name}): raw=${extracted.rawItemCount}, phones=${extracted.phones.length}, new=${newOnThisPage}, hasMore=${extracted.hasMore}, nextCursor=${extracted.nextCursor ?? 'none'}.`,
     );
 
     if (extracted.rawItemCount === 0 && extracted.phones.length === 0) {
       if (pageIndex === 1 && payload && typeof payload === 'object') {
         const rootObj = Array.isArray(payload) ? payload[0] : payload;
         const topKeys = rootObj && typeof rootObj === 'object' ? Object.keys(rootObj) : [];
-        console.log(`Schema hint (keys only): ${JSON.stringify(topKeys)}`);
+        console.log(`[${label}] Schema hint (keys only): ${JSON.stringify(topKeys)}`);
       }
       break;
     }
 
-    if (pageIndex > 1 && uniqueAddedThisPage === 0) {
-      console.log(`Stopping pagination: page ${pageIndex} yielded no new unique entries.`);
+    if (pageIndex > 1 && uniqueAddedThisPage === 0 && !extracted.nextCursor) {
+      console.log(`[${label}] Stopping pagination: page ${pageIndex} yielded no new unique entries.`);
       break;
     }
 
-    // Stop early when incremental sync reaches a page with only already-stored numbers
-    if (!fetchAll && existingKeys.size > 0 && newOnThisPage === 0) {
-      console.log(`Incremental stop: page ${pageIndex} contains only existing numbers.`);
+    // Stop early on messages endpoint when incremental sync reaches already-stored numbers
+    if (!fetchAll && !extracted.nextCursor && existingKeys.size > 0 && newOnThisPage === 0) {
+      console.log(`[${label}] Incremental stop: page ${pageIndex} contains only existing numbers.`);
       break;
     }
 
-    if (extracted.nextUrl) {
-      nextUrl = new URL(extracted.nextUrl, baseUrl).toString();
+    if (extracted.nextCursor) {
+      usedCursorPagination = true;
+      if (seenCursors.has(extracted.nextCursor)) {
+        console.log(`[${label}] Stopping cursor pagination: cursor already visited.`);
+        break;
+      }
+      seenCursors.add(extracted.nextCursor);
+      nextUrl = buildPageUrl(endpointUrl, pageIndex + 1, pageLimit, extracted.nextCursor);
+    } else if (usedCursorPagination) {
+      nextUrl = null;
+    } else if (extracted.nextUrl) {
+      nextUrl = new URL(extracted.nextUrl, endpointUrl).toString();
     } else if (extracted.hasMore || extracted.rawItemCount >= pageLimit) {
-      nextUrl = buildPageUrl(baseUrl, pageIndex + 1, pageLimit);
+      nextUrl = buildPageUrl(endpointUrl, pageIndex + 1, pageLimit);
     } else if (fetchAll && extracted.rawItemCount > 0 && !extracted.lastPage && !extracted.totalCount) {
-      // Probe next page when API omits pagination metadata during full sync (stops on empty or repeated page)
-      nextUrl = buildPageUrl(baseUrl, pageIndex + 1, pageLimit);
+      nextUrl = buildPageUrl(endpointUrl, pageIndex + 1, pageLimit);
     } else {
       nextUrl = null;
     }
 
     pageIndex += 1;
+  }
+
+  return lockedStrategy;
+}
+
+async function main() {
+  const token = (process.env.LAMIX || process.env.LAMIX_API_KEY || '').trim();
+  if (!token) {
+    if (process.env.REQUIRE_LAMIX === 'true') {
+      console.error('LAMIX secret is missing.');
+      process.exit(1);
+    }
+    console.log('LAMIX secret not configured; skipping API fetch.');
+    return;
+  }
+
+  const customApiUrl = (process.env.LAMIX_API_URL || '').trim();
+  const phonesFilePath = path.resolve(process.cwd(), process.env.PHONES_FILE || 'phones.txt');
+  const fetchAll = process.env.LAMIX_FETCH_ALL === 'true';
+  const maxPages = Math.max(1, Number(process.env.LAMIX_MAX_PAGES || 100) || 100);
+  const pageLimit = Math.max(10, Number(process.env.LAMIX_PAGE_LIMIT || 500) || 500);
+
+  const existingContent = fs.existsSync(phonesFilePath)
+    ? fs.readFileSync(phonesFilePath, 'utf8')
+    : '';
+
+  const initialMerge = mergePhonesIntoList(existingContent, []);
+  const existingKeys = new Set(initialMerge.mergedPhones.map((p) => normalizePhoneKey(p)));
+
+  const endpoints = customApiUrl
+    ? [{ url: customApiUrl, label: 'custom' }]
+    : fetchAll
+      ? [
+          { url: 'https://panel.lamix.org/api/v1/messages', label: 'messages' },
+          { url: 'https://panel.lamix.org/api/v1/numbers', label: 'numbers' },
+        ]
+      : [{ url: 'https://panel.lamix.org/api/v1/messages', label: 'messages' }];
+
+  let lockedStrategy: AuthStrategy | null = null;
+  const allFetchedPhones: string[] = [];
+  const seenThisSync = new Set<string>();
+
+  for (const endpoint of endpoints) {
+    lockedStrategy = await fetchEndpointPhones({
+      endpointUrl: endpoint.url,
+      label: endpoint.label,
+      token,
+      fetchAll,
+      maxPages,
+      pageLimit,
+      existingKeys,
+      seenThisSync,
+      allFetchedPhones,
+      lockedStrategy,
+    });
   }
 
   const result = mergePhonesIntoList(existingContent, allFetchedPhones, { newestFirst: true });

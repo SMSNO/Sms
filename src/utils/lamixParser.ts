@@ -4,6 +4,7 @@ export interface LamixExtractedPage {
   phones: string[];
   rawItemCount: number;
   nextUrl: string | null;
+  nextCursor: string | null;
   currentPage: number | null;
   lastPage: number | null;
   totalCount: number | null;
@@ -119,6 +120,7 @@ function asPositiveInt(val: unknown): number | null {
 export function extractLamixPayload(payload: unknown): LamixExtractedPage {
   let rawItems: unknown[] = [];
   let nextUrl: string | null = null;
+  let nextCursor: string | null = null;
   let currentPage: number | null = null;
   let lastPage: number | null = null;
   let totalCount: number | null = null;
@@ -186,6 +188,13 @@ export function extractLamixPayload(payload: unknown): LamixExtractedPage {
       if (!perPage) {
         perPage = asPositiveInt(src.per_page ?? src.perPage ?? src.page_size ?? src.pageSize ?? src.limit);
       }
+      const rawCursor = src.nextCursor ?? src.next_cursor;
+      if (!nextCursor && (typeof rawCursor === 'string' || typeof rawCursor === 'number')) {
+        const cursorStr = String(rawCursor).trim();
+        if (cursorStr) {
+          nextCursor = cursorStr;
+        }
+      }
       if (
         (typeof src.has_more === 'boolean' && src.has_more) ||
         (typeof src.hasMore === 'boolean' && src.hasMore) ||
@@ -198,7 +207,7 @@ export function extractLamixPayload(payload: unknown): LamixExtractedPage {
       }
     }
 
-    if (nextUrl) {
+    if (nextUrl || nextCursor) {
       hasMore = true;
     } else if (currentPage && lastPage && currentPage < lastPage) {
       hasMore = true;
@@ -219,6 +228,7 @@ export function extractLamixPayload(payload: unknown): LamixExtractedPage {
     phones,
     rawItemCount: rawItems.length,
     nextUrl,
+    nextCursor,
     currentPage,
     lastPage,
     totalCount,
