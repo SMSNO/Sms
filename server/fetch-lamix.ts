@@ -288,14 +288,22 @@ async function main() {
   const initialMerge = mergePhonesIntoList(baseContentForMerge, []);
   const existingKeys = new Set(initialMerge.mergedPhones.map((p) => normalizePhoneKey(p)));
 
+  const includeMessagesOnReplace = process.env.LAMIX_INCLUDE_MESSAGES === 'true';
   const endpoints = customApiUrl
     ? [{ url: customApiUrl, label: 'custom' }]
-    : fetchAll
+    : replaceMode
       ? [
-          { url: 'https://panel.lamix.org/api/v1/messages', label: 'messages' },
+          ...(includeMessagesOnReplace
+            ? [{ url: 'https://panel.lamix.org/api/v1/messages', label: 'messages' }]
+            : []),
           { url: 'https://panel.lamix.org/api/v1/numbers', label: 'numbers' },
         ]
-      : [{ url: 'https://panel.lamix.org/api/v1/messages', label: 'messages' }];
+      : fetchAll
+        ? [
+            { url: 'https://panel.lamix.org/api/v1/numbers', label: 'numbers' },
+            { url: 'https://panel.lamix.org/api/v1/messages', label: 'messages' },
+          ]
+        : [{ url: 'https://panel.lamix.org/api/v1/messages', label: 'messages' }];
 
   let lockedStrategy: AuthStrategy | null = null;
   const allFetchedPhones: string[] = [];
