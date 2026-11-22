@@ -160,12 +160,14 @@ async function main() {
 
     const extracted = extractLamixPayload(payload);
     let newOnThisPage = 0;
+    let uniqueAddedThisPage = 0;
 
     for (const phone of extracted.phones) {
       const key = normalizePhoneKey(phone);
       if (!seenThisSync.has(key)) {
         seenThisSync.add(key);
         allFetchedPhones.push(phone);
+        uniqueAddedThisPage += 1;
       }
       if (!existingKeys.has(key)) {
         newOnThisPage += 1;
@@ -173,15 +175,20 @@ async function main() {
     }
 
     console.log(
-      `Page ${pageIndex} (${strategy.name}): found ${extracted.phones.length} phone entries (${newOnThisPage} new).`,
+      `Page ${pageIndex} (${strategy.name}): raw=${extracted.rawItemCount}, phones=${extracted.phones.length}, new=${newOnThisPage}, hasMore=${extracted.hasMore}, page=${extracted.currentPage ?? '?'}/${extracted.lastPage ?? '?'}, total=${extracted.totalCount ?? '?'}, perPage=${extracted.perPage ?? '?'}.`,
     );
 
-    if (extracted.phones.length === 0) {
+    if (extracted.rawItemCount === 0 && extracted.phones.length === 0) {
       if (pageIndex === 1 && payload && typeof payload === 'object') {
         const rootObj = Array.isArray(payload) ? payload[0] : payload;
         const topKeys = rootObj && typeof rootObj === 'object' ? Object.keys(rootObj) : [];
         console.log(`Schema hint (keys only): ${JSON.stringify(topKeys)}`);
       }
+      break;
+    }
+
+    if (pageIndex > 1 && uniqueAddedThisPage === 0) {
+      console.log(`Stopping pagination: page ${pageIndex} yielded no new unique entries.`);
       break;
     }
 
@@ -193,7 +200,10 @@ async function main() {
 
     if (extracted.nextUrl) {
       nextUrl = new URL(extracted.nextUrl, baseUrl).toString();
-    } else if (extracted.hasMore || extracted.phones.length >= pageLimit) {
+    } else if (extracted.hasMore || extracted.rawItemCount >= pageLimit) {
+      nextUrl = buildPageUrl(baseUrl, pageIndex + 1, pageLimit);
+    } else if (fetchAll && extracted.rawItemCount > 0 && !extracted.lastPage && !extracted.totalCount) {
+      // Probe next page when API omits pagination metadata during full sync (stops on empty or repeated page)
       nextUrl = buildPageUrl(baseUrl, pageIndex + 1, pageLimit);
     } else {
       nextUrl = null;

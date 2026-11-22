@@ -2,9 +2,12 @@ import { normalizePhoneKey } from './phoneQueue.ts';
 
 export interface LamixExtractedPage {
   phones: string[];
+  rawItemCount: number;
   nextUrl: string | null;
   currentPage: number | null;
   lastPage: number | null;
+  totalCount: number | null;
+  perPage: number | null;
   hasMore: boolean;
 }
 
@@ -118,6 +121,8 @@ export function extractLamixPayload(payload: unknown): LamixExtractedPage {
   let nextUrl: string | null = null;
   let currentPage: number | null = null;
   let lastPage: number | null = null;
+  let totalCount: number | null = null;
+  let perPage: number | null = null;
   let hasMore = false;
 
   if (Array.isArray(payload)) {
@@ -166,16 +171,29 @@ export function extractLamixPayload(payload: unknown): LamixExtractedPage {
       if (!nextUrl && typeof src.next === 'string' && src.next) {
         nextUrl = src.next;
       }
+      if (!nextUrl && typeof src.next_page === 'string' && /^https?:|^\/|\?/.test(src.next_page)) {
+        nextUrl = src.next_page;
+      }
       if (!currentPage) {
-        currentPage = asPositiveInt(src.current_page ?? src.page);
+        currentPage = asPositiveInt(src.current_page ?? src.page ?? src.currentPage);
       }
       if (!lastPage) {
-        lastPage = asPositiveInt(src.last_page ?? src.total_pages ?? src.pages);
+        lastPage = asPositiveInt(src.last_page ?? src.total_pages ?? src.totalPages ?? src.pages);
       }
-      if (typeof src.has_more === 'boolean' && src.has_more) {
-        hasMore = true;
+      if (!totalCount) {
+        totalCount = asPositiveInt(src.total ?? src.total_items ?? src.totalItems ?? src.total_count ?? src.totalCount);
       }
-      if (typeof src.hasMore === 'boolean' && src.hasMore) {
+      if (!perPage) {
+        perPage = asPositiveInt(src.per_page ?? src.perPage ?? src.page_size ?? src.pageSize ?? src.limit);
+      }
+      if (
+        (typeof src.has_more === 'boolean' && src.has_more) ||
+        (typeof src.hasMore === 'boolean' && src.hasMore) ||
+        (typeof src.has_next === 'boolean' && src.has_next) ||
+        (typeof src.hasNext === 'boolean' && src.hasNext) ||
+        (typeof src.has_next_page === 'boolean' && src.has_next_page) ||
+        (typeof src.hasNextPage === 'boolean' && src.hasNextPage)
+      ) {
         hasMore = true;
       }
     }
@@ -183,6 +201,8 @@ export function extractLamixPayload(payload: unknown): LamixExtractedPage {
     if (nextUrl) {
       hasMore = true;
     } else if (currentPage && lastPage && currentPage < lastPage) {
+      hasMore = true;
+    } else if (totalCount && perPage && (currentPage ?? 1) * perPage < totalCount) {
       hasMore = true;
     }
   }
@@ -197,9 +217,12 @@ export function extractLamixPayload(payload: unknown): LamixExtractedPage {
 
   return {
     phones,
+    rawItemCount: rawItems.length,
     nextUrl,
     currentPage,
     lastPage,
+    totalCount,
+    perPage,
     hasMore,
   };
 }

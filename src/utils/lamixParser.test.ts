@@ -57,6 +57,15 @@ test('extractLamixPayload supports flat arrays, nested data, and pagination meta
   assert.equal(paginated.lastPage, 3);
   assert.equal(paginated.hasMore, true);
   assert.equal(paginated.nextUrl, 'https://panel.lamix.org/api/v1/messages?page=2');
+
+  const totalBased = extractLamixPayload({
+    messages: [{ phone: '201208546652' }],
+    meta: { page: 1, per_page: 25, total: 60 },
+  });
+  assert.deepEqual(totalBased.phones, ['+201208546652']);
+  assert.equal(totalBased.totalCount, 60);
+  assert.equal(totalBased.perPage, 25);
+  assert.equal(totalBased.hasMore, true);
 });
 
 test('mergePhonesIntoList adds only new unique numbers with + prefix and preserves existing entries', () => {
