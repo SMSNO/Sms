@@ -86,8 +86,29 @@ async function findFirstVisibleLocator(
   return null;
 }
 
-async function locatePhoneInput(page: Page): Promise<Locator | null> {
-  const candidates: Locator[] = [
+const NON_PHONE_INPUT_PATTERN =
+  /search|query|keyword|filter|email|mail|user\s*name|password|passcode|otp|pin|captcha|coupon|promo|بحث|بريد|كلمة\s*المرور|رمز\s*التحقق/i;
+
+async function isPlausibleGenericPhoneInput(locator: Locator): Promise<boolean> {
+  return locator
+    .evaluate((el, patternSource) => {
+      const re = new RegExp(patternSource, 'i');
+      if (el.closest('[role="search"], form[role="search"]')) return false;
+      const attrs = [
+        el.getAttribute('name') || '',
+        el.getAttribute('id') || '',
+        el.getAttribute('placeholder') || '',
+        el.getAttribute('aria-label') || '',
+        el.getAttribute('autocomplete') || '',
+        el.getAttribute('data-testid') || '',
+      ].join(' ');
+      return !re.test(attrs);
+    }, NON_PHONE_INPUT_PATTERN.source)
+    .catch(() => true);
+}
+
+async function locatePhoneInput(page: Page, strictOnly = false): Promise<Locator | null> {
+  const strictCandidates: Locator[] = [
     page.locator('input[type="tel"]'),
     page.locator('input[autocomplete="tel"], input[autocomplete="tel-national"]'),
     page.locator(
@@ -100,11 +121,32 @@ async function locatePhoneInput(page: Page): Promise<Locator | null> {
     page.getByRole('textbox', {
       name: /phone|mobile|tel|هاتف|جوال|موبايل|رقم/i,
     }),
+  ];
+
+  const strictMatch = await findFirstVisibleLocator(strictCandidates, 'INPUT');
+  if (strictMatch || strictOnly) {
+    return strictMatch;
+  }
+
+  const genericCandidates: Locator[] = [
     page.locator('form input[type="text"], form input:not([type])'),
     page.locator('input[type="text"], input:not([type])'),
   ];
 
-  return findFirstVisibleLocator(candidates, 'INPUT');
+  for (const candidate of genericCandidates) {
+    const count = await candidate.count().catch(() => 0);
+    for (let i = 0; i < count; i += 1) {
+      const nth = candidate.nth(i);
+      const visible = await nth.isVisible().catch(() => false);
+      const enabled = await nth.isEnabled().catch(() => false);
+      if (!visible || !enabled) continue;
+      if (await isPlausibleGenericPhoneInput(nth)) {
+        return nth;
+      }
+    }
+  }
+
+  return null;
 }
 
 async function isActionElementUsable(locator: Locator): Promise<boolean> {
@@ -156,7 +198,7 @@ async function isExcludedNonSubmitButton(locator: Locator): Promise<boolean> {
 }
 
 const ACTION_BUTTON_NAME_PATTERN =
-  /submit|send(\s*code)?|get\s*code|request\s*code|resend|verify|otp|continue|next|proceed|confirm|save|done|ok|go|start|log\s*in|login|sign\s*in|signin|sign\s*up|signup|register|إرسال(\s*الرمز)?|ارسال(\s*الرمز)?|أرسل(\s*الرمز)?|ارسل(\s*الرمز)?|طلب الرمز|الحصول على الرمز|متابعة|المتابعة|التالي|التالى|تأكيد|حفظ|تسجيل\s*الدخول|تسجيل|دخول|استمرار|موافق|ابدأ|تحقق/i;
+  /submit|send(\s*code)?|get\s*code|request\s*code|resend|verify|otp|continue|next|proceed|confirm|save|done|ok|go|start|log\s*in|login|sign\s*in|signin|sign\s*up|signup|register|إرسال(\s*الرمز)?|ارسال(\s*الرمز)?|أرسل(\s*الرمز)?|ارسل(\s*الرمز)?|طلب الرمز|الحصول على الرمز|متابعة|المتابعة|مواصلة|المواصلة|التالي|التالى|تأكيد|حفظ|تسجيل\s*الدخول|تسجيل|دخول|استمرار|موافق|ابدأ|تحقق/i;
 
 async function findFirstActionButtonInScope(
   scope: Page | Locator,
@@ -230,16 +272,20 @@ async function locateSubmitButton(page: Page, phoneInput: Locator): Promise<Loca
   return null;
 }
 
-async function waitForPhoneInput(page: Page, timeoutMs = 6000): Promise<Locator | null> {
+async function waitForPhoneInput(
+  page: Page,
+  timeoutMs = 6000,
+  strictOnly = false,
+): Promise<Locator | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const input = await locatePhoneInput(page);
+    const input = await locatePhoneInput(page, strictOnly);
     if (input) {
       return input;
     }
     await page.waitForTimeout(300);
   }
-  return locatePhoneInput(page);
+  return locatePhoneInput(page, strictOnly);
 }
 
 async function waitForSubmitButton(
@@ -299,7 +345,7 @@ async function findLoginTrigger(
 
     const combined = `${meta.text} ${meta.aria} ${meta.title}`.trim();
     if (!combined && !meta.href) continue;
-    if (LOGIN_EXCLUDE_PATTERN.test(combined)) continue;
+    if (LOGIN_EXCLUDE_PATTERN.test(combined) && !PHONE_LOGIN_HINT_PATTERN.test(combined)) continue;
 
     const signature = `${meta.text}|${meta.aria}|${meta.href}`;
     if (skipSignatures?.has(signature)) continue;
@@ -419,9 +465,11 @@ async function selectCountryCodeIfPresent(
     }
   }
 
-  // 2) intl-tel-input flag dropdown (.iti__selected-flag)
+  // 2) intl-tel-input flag dropdown (.iti__selected-flag / .iti__selected-country)
   for (const scope of candidateScopes) {
-    const itiButton = scope.locator('.iti__selected-flag, .iti__flag-container button').first();
+    const itiButton = scope
+      .locator('.iti__selected-country, .iti__selected-flag, .iti__flag-container button')
+      .first();
     if ((await itiButton.count().catch(() => 0)) > 0 && (await itiButton.isVisible().catch(() => false))) {
       const currentText = (await itiButton.innerText().catch(() => '')).trim();
       if (exactDialRegex.test(currentText)) {
@@ -445,6 +493,9 @@ async function selectCountryCodeIfPresent(
         'button[aria-label*="country" i], button[aria-label*="dial" i], button[aria-label*="code" i], button[aria-label*="الدولة"], [role="button"][aria-label*="country" i], [role="button"][aria-label*="dial" i], [role="combobox"][aria-label*="country" i], button[data-testid*="country" i], [role="button"][data-testid*="country" i], [role="combobox"][data-testid*="country" i]',
       ),
       scope.locator('button, [role="button"], [role="combobox"]').filter({ hasText: /\+\d{1,3}\b/ }),
+      scope.locator('div[class*="country" i], div[class*="dial" i], span[class*="country" i], span[class*="dial" i]').filter({
+        hasText: /^\s*(?:[A-Z]{2}\s*)?\+\d{1,4}\s*$/,
+      }),
     ];
 
     for (const candidate of countryBtnCandidates) {
@@ -667,7 +718,7 @@ async function processSingleNumber(
       };
     }
 
-    let phoneInput = await waitForPhoneInput(page, 2500);
+    let phoneInput = await waitForPhoneInput(page, 2500, true);
     if (!phoneInput) {
       const navigatedLogin = await openLoginEntryIfNeeded(page);
       if (navigatedLogin) {
@@ -677,7 +728,9 @@ async function processSingleNumber(
             details: 'تحتوي الصفحة على نظام تحقق أمني؛ لا يقوم النظام بتجاوز قيود المواقع.',
           };
         }
-        phoneInput = await waitForPhoneInput(page, 4000);
+        phoneInput = await waitForPhoneInput(page, 4000, false);
+      } else {
+        phoneInput = await waitForPhoneInput(page, 1000, false);
       }
     }
 

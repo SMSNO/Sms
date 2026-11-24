@@ -198,6 +198,7 @@ app.get('/test-form-landing-login', (_req, res) => {
   <body>
     <header>
       <a href="#features">المميزات</a>
+      <input id="site-search" type="text" placeholder="Search..." />
       <button id="open-login-btn" type="button">Login</button>
     </header>
     <main>
