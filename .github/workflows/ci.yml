@@ -154,4 +154,23 @@ jobs:
             assert.equal(loginResults[0].status, "success");
             assert.ok(loginResults[0].details.includes("تم تسجيل الدخول بالرقم"));
             console.log("Login button E2E verification passed:", loginResults.map((r) => ({ phone: r.phone, details: r.details })));
+
+            const landingLoginRes = await fetch("http://localhost:3000/api/automate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                url: "http://localhost:3000/test-form-landing-login",
+                phones: "+6281511410288\n+966501234567",
+                delayMs: 0
+              })
+            });
+            assert.equal(landingLoginRes.status, 200);
+            const landingText = await landingLoginRes.text();
+            const landingResults = landingText.trim().split("\n").map((line) => JSON.parse(line)).filter((e) => e.type === "result");
+            assert.equal(landingResults.length, 2);
+            assert.equal(landingResults[0].status, "success");
+            assert.ok(landingResults[0].details.includes("+62") && landingResults[0].details.includes("81511410288"));
+            assert.equal(landingResults[1].status, "success");
+            assert.ok(landingResults[1].details.includes("+966") && landingResults[1].details.includes("501234567"));
+            console.log("Landing-to-login E2E verification passed:", landingResults.map((r) => ({ phone: r.phone, details: r.details })));
           '

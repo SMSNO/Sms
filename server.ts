@@ -187,6 +187,80 @@ app.get('/test-form-login', (_req, res) => {
 </html>`);
 });
 
+app.get('/test-form-landing-login', (_req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(`<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <title>نموذج اختبار صفحة رئيسية مع زر دخول</title>
+  </head>
+  <body>
+    <header>
+      <a href="#features">المميزات</a>
+      <button id="open-login-btn" type="button">Login</button>
+    </header>
+    <main>
+      <h1>صفحة رئيسية تجريبية</h1>
+      <p>اضغط على زر الدخول لفتح نافذة إدخال رقم الهاتف.</p>
+    </main>
+    <div id="login-modal" role="dialog" style="display:none;">
+      <button id="close-modal" type="button" aria-label="Close">×</button>
+      <button id="country-picker-btn" type="button" aria-label="Select country code">+20</button>
+      <div id="country-dropdown" style="display:none;">
+        <input id="country-search" type="search" placeholder="Search country" />
+        <div id="country-options">
+          <button type="button" role="option" data-dial-code="20">Egypt +20</button>
+          <button type="button" role="option" data-dial-code="62">Indonesia +62</button>
+          <button type="button" role="option" data-dial-code="966">Saudi Arabia +966</button>
+        </div>
+      </div>
+      <input id="modal-phone-input" type="tel" placeholder="Enter your phone number" />
+      <button id="modal-send-btn" type="button">Send OTP</button>
+      <button type="button">Login with Email</button>
+      <div id="modal-feedback"></div>
+    </div>
+    <script>
+      let selectedDial = '+20';
+      const openBtn = document.getElementById('open-login-btn');
+      const modal = document.getElementById('login-modal');
+      const pickerBtn = document.getElementById('country-picker-btn');
+      const dropdown = document.getElementById('country-dropdown');
+      const searchInp = document.getElementById('country-search');
+      const opts = Array.from(document.querySelectorAll('#country-options [role="option"]'));
+      const phoneInp = document.getElementById('modal-phone-input');
+      const sendBtn = document.getElementById('modal-send-btn');
+      const fb = document.getElementById('modal-feedback');
+
+      openBtn.addEventListener('click', () => {
+        modal.style.display = 'block';
+      });
+      pickerBtn.addEventListener('click', () => {
+        dropdown.style.display = 'block';
+      });
+      searchInp.addEventListener('input', () => {
+        const q = searchInp.value.toLowerCase();
+        opts.forEach((o) => {
+          o.style.display = o.textContent.toLowerCase().includes(q) ? 'block' : 'none';
+        });
+      });
+      opts.forEach((opt) => {
+        opt.addEventListener('click', () => {
+          selectedDial = '+' + opt.getAttribute('data-dial-code');
+          pickerBtn.textContent = selectedDial;
+          dropdown.style.display = 'none';
+        });
+      });
+      sendBtn.addEventListener('click', () => {
+        fb.setAttribute('role', 'status');
+        fb.setAttribute('data-status', 'success');
+        fb.textContent = 'تم الإرسال عبر الدخول بالكود ' + selectedDial + ' والرقم ' + phoneInp.value.trim();
+      });
+    </script>
+  </body>
+</html>`);
+});
+
 app.post('/api/automate', async (req, res) => {
   const rawUrl = typeof req.body?.url === 'string' ? req.body.url : '';
   const rawPhones = typeof req.body?.phones === 'string' ? req.body.phones : '';

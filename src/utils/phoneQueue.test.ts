@@ -101,14 +101,21 @@ test('splitPhoneCountryCode parses + and 00 international prefixes accurately', 
     countryCode: '+20',
     dialDigits: '20',
     nationalNumber: '1223189009',
-    preferredCountryName: undefined,
+    preferredCountryName: 'Egypt',
   });
 
   assert.deepEqual(splitPhoneCountryCode('00966 50 123 4567'), {
     countryCode: '+966',
     dialDigits: '966',
     nationalNumber: '501234567',
-    preferredCountryName: undefined,
+    preferredCountryName: 'Saudi Arabia',
+  });
+
+  assert.deepEqual(splitPhoneCountryCode('+6281511410288'), {
+    countryCode: '+62',
+    dialDigits: '62',
+    nationalNumber: '81511410288',
+    preferredCountryName: 'Indonesia',
   });
 
   assert.deepEqual(splitPhoneCountryCode('+1 (415) 555-0199'), {

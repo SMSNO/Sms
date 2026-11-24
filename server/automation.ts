@@ -258,6 +258,108 @@ async function waitForSubmitButton(
   return locateSubmitButton(page, phoneInput);
 }
 
+const LOGIN_ENTRY_PATTERN =
+  /^(log\s*in|login|sign\s*in|signin|log\s*in\s*\/\s*sign\s*up|sign\s*in\s*\/\s*sign\s*up|تسجيل\s*(ال)?دخول|دخول|تسجيل|حسابي|get\s*started|continue\s*with\s*phone|use\s*phone(\s*number)?|phone\s*login)$/i;
+
+const PHONE_LOGIN_HINT_PATTERN =
+  /(phone|mobile|sms|otp|هاتف|جوال|موبايل)/i;
+
+const LOGIN_TEXT_FALLBACK_PATTERN =
+  /(log\s*in|sign\s*in|تسجيل\s*(ال)?دخول|برقم\s*الهاتف|رقم\s*الهاتف)/i;
+
+const LOGIN_EXCLUDE_PATTERN =
+  /log\s*out|sign\s*out|تسجيل\s*الخروج|خروج|google|facebook|apple|twitter|microsoft|github|email|mail|بريد|cookie|privacy|سياسة|خصوصية|forgot|نسيت/i;
+
+async function findLoginTrigger(
+  page: Page,
+  allowFallbackText = false,
+  skipSignatures?: ReadonlySet<string>,
+): Promise<{ locator: Locator; signature: string } | null> {
+  const candidates = page.locator(
+    'a, button, [role="button"], input[type="button"], input[type="submit"]',
+  );
+  const count = await candidates.count().catch(() => 0);
+
+  let exactMatch: { locator: Locator; signature: string } | null = null;
+  let fallbackMatch: { locator: Locator; signature: string } | null = null;
+
+  for (let i = 0; i < count; i += 1) {
+    const nth = candidates.nth(i);
+    if (!(await isActionElementUsable(nth))) continue;
+
+    const meta = await nth
+      .evaluate((el) => {
+        const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        const aria = (el.getAttribute('aria-label') || '').trim();
+        const title = (el.getAttribute('title') || '').trim();
+        const href = (el.getAttribute('href') || '').trim();
+        return { text, aria, title, href };
+      })
+      .catch(() => ({ text: '', aria: '', title: '', href: '' }));
+
+    const combined = `${meta.text} ${meta.aria} ${meta.title}`.trim();
+    if (!combined && !meta.href) continue;
+    if (LOGIN_EXCLUDE_PATTERN.test(combined)) continue;
+
+    const signature = `${meta.text}|${meta.aria}|${meta.href}`;
+    if (skipSignatures?.has(signature)) continue;
+
+    const isExactLogin =
+      (meta.text && LOGIN_ENTRY_PATTERN.test(meta.text)) ||
+      (meta.aria && LOGIN_ENTRY_PATTERN.test(meta.aria));
+
+    if (isExactLogin) {
+      if (PHONE_LOGIN_HINT_PATTERN.test(combined)) {
+        return { locator: nth, signature };
+      }
+      if (!exactMatch) {
+        exactMatch = { locator: nth, signature };
+      }
+      continue;
+    }
+
+    if (
+      !fallbackMatch &&
+      allowFallbackText &&
+      (LOGIN_TEXT_FALLBACK_PATTERN.test(combined) || /\/(login|signin|auth)\b/i.test(meta.href))
+    ) {
+      fallbackMatch = { locator: nth, signature };
+    }
+  }
+
+  return exactMatch ?? fallbackMatch;
+}
+
+async function openLoginEntryIfNeeded(page: Page): Promise<boolean> {
+  let clickedAny = false;
+  const clickedSignatures = new Set<string>();
+
+  for (let step = 0; step < 2; step += 1) {
+    const triggerMatch =
+      (await findLoginTrigger(page, false, clickedSignatures)) ??
+      (await findLoginTrigger(page, true, clickedSignatures));
+    if (!triggerMatch) {
+      break;
+    }
+
+    clickedSignatures.add(triggerMatch.signature);
+    await triggerMatch.locator.scrollIntoViewIfNeeded().catch(() => undefined);
+    await triggerMatch.locator.click({ timeout: 5000 }).catch(() => undefined);
+    clickedAny = true;
+
+    await page.waitForLoadState('domcontentloaded', { timeout: 4000 }).catch(() => undefined);
+    await page.waitForLoadState('networkidle', { timeout: 2500 }).catch(() => undefined);
+    await page.waitForTimeout(450);
+
+    const inputAfterClick = await waitForPhoneInput(page, 2500);
+    if (inputAfterClick) {
+      return true;
+    }
+  }
+
+  return clickedAny;
+}
+
 async function selectCountryCodeIfPresent(
   page: Page,
   phoneInput: Locator,
@@ -269,90 +371,97 @@ async function selectCountryCodeIfPresent(
   const hasParentForm = (await parentForm.count().catch(() => 0)) > 0;
   const parentDialog = phoneInput.locator('xpath=ancestor::*[@role="dialog"][1]');
   const hasParentDialog = (await parentDialog.count().catch(() => 0)) > 0;
-  const scope: Page | Locator = hasParentForm
-    ? parentForm
-    : hasParentDialog
-      ? parentDialog
-      : page;
+
+  const candidateScopes: Array<Page | Locator> = [];
+  if (hasParentForm) candidateScopes.push(parentForm);
+  if (hasParentDialog) candidateScopes.push(parentDialog);
+  candidateScopes.push(page);
 
   const exactDialRegex = new RegExp(`(?:^|\\D)\\+${dialDigits}(?:\\D|$)`);
 
-  // 1) Native <select> country-code dropdown inside scope
-  const selects = scope.locator('select');
-  const selectCount = await selects.count().catch(() => 0);
-  for (let i = 0; i < selectCount; i += 1) {
-    const select = selects.nth(i);
-    if (!(await select.isVisible().catch(() => false))) continue;
+  // 1) Native <select> country-code dropdown across scopes
+  for (const scope of candidateScopes) {
+    const selects = scope.locator('select');
+    const selectCount = await selects.count().catch(() => 0);
+    for (let i = 0; i < selectCount; i += 1) {
+      const select = selects.nth(i);
+      if (!(await select.isVisible().catch(() => false))) continue;
 
-    const chosenValue = await select
-      .evaluate(
-        (el, args) => {
-          const sel = el as HTMLSelectElement;
-          const regex = new RegExp(`(?:^|\\D)\\+${args.dialDigits}(?:\\D|$)`);
-          const matches: Array<{ value: string; text: string }> = [];
-          for (const opt of Array.from(sel.options)) {
-            const label = `${opt.textContent || ''} ${opt.value || ''}`;
-            if (regex.test(label) || opt.value === `+${args.dialDigits}` || opt.value === args.dialDigits) {
-              matches.push({ value: opt.value, text: opt.textContent || '' });
+      const chosenValue = await select
+        .evaluate(
+          (el, args) => {
+            const sel = el as HTMLSelectElement;
+            const regex = new RegExp(`(?:^|\\D)\\+${args.dialDigits}(?:\\D|$)`);
+            const matches: Array<{ value: string; text: string }> = [];
+            for (const opt of Array.from(sel.options)) {
+              const label = `${opt.textContent || ''} ${opt.value || ''}`;
+              if (regex.test(label) || opt.value === `+${args.dialDigits}` || opt.value === args.dialDigits) {
+                matches.push({ value: opt.value, text: opt.textContent || '' });
+              }
             }
-          }
-          if (matches.length === 0) return null;
-          if (args.preferredName) {
-            const pref = matches.find((m) =>
-              m.text.toLowerCase().includes(args.preferredName!.toLowerCase()),
-            );
-            if (pref) return pref.value;
-          }
-          return matches[0].value;
-        },
-        { dialDigits, preferredName: preferredCountryName ?? null },
-      )
-      .catch(() => null);
+            if (matches.length === 0) return null;
+            if (args.preferredName) {
+              const pref = matches.find((m) =>
+                m.text.toLowerCase().includes(args.preferredName!.toLowerCase()),
+              );
+              if (pref) return pref.value;
+            }
+            return matches[0].value;
+          },
+          { dialDigits, preferredName: preferredCountryName ?? null },
+        )
+        .catch(() => null);
 
-    if (chosenValue !== null) {
-      await select.selectOption(chosenValue).catch(() => undefined);
-      return true;
+      if (chosenValue !== null) {
+        await select.selectOption(chosenValue).catch(() => undefined);
+        return true;
+      }
     }
   }
 
   // 2) intl-tel-input flag dropdown (.iti__selected-flag)
-  const itiButton = scope.locator('.iti__selected-flag, .iti__flag-container button').first();
-  if ((await itiButton.count().catch(() => 0)) > 0 && (await itiButton.isVisible().catch(() => false))) {
-    const currentText = (await itiButton.innerText().catch(() => '')).trim();
-    if (exactDialRegex.test(currentText)) {
-      return true;
-    }
-    await itiButton.click({ timeout: 3000 }).catch(() => undefined);
-    await page.waitForTimeout(200);
-    const countryOption = page.locator(`.iti__country[data-dial-code="${dialDigits}"]`).first();
-    if ((await countryOption.count().catch(() => 0)) > 0) {
-      await countryOption.click({ timeout: 3000 }).catch(() => undefined);
-      return true;
+  for (const scope of candidateScopes) {
+    const itiButton = scope.locator('.iti__selected-flag, .iti__flag-container button').first();
+    if ((await itiButton.count().catch(() => 0)) > 0 && (await itiButton.isVisible().catch(() => false))) {
+      const currentText = (await itiButton.innerText().catch(() => '')).trim();
+      if (exactDialRegex.test(currentText)) {
+        return true;
+      }
+      await itiButton.click({ timeout: 3000 }).catch(() => undefined);
+      await page.waitForTimeout(200);
+      const countryOption = page.locator(`.iti__country[data-dial-code="${dialDigits}"]`).first();
+      if ((await countryOption.count().catch(() => 0)) > 0) {
+        await countryOption.click({ timeout: 3000 }).catch(() => undefined);
+        return true;
+      }
     }
   }
 
-  // 3) Custom country-code picker button (e.g. button/[role="button"] with country label or +XX)
-  const countryBtnCandidates: Locator[] = [
-    scope.locator(
-      'button[aria-label*="country" i], button[aria-label*="dial" i], button[aria-label*="code" i], button[aria-label*="الدولة"], [role="button"][aria-label*="country" i], [role="button"][aria-label*="dial" i]',
-    ),
-    scope.locator('button, [role="button"]').filter({ hasText: /\+\d{1,3}\b/ }),
-  ];
-
+  // 3) Custom country-code picker button / combobox
   let countryBtn: Locator | null = null;
-  for (const candidate of countryBtnCandidates) {
-    const count = await candidate.count().catch(() => 0);
-    for (let i = 0; i < count; i += 1) {
-      const nth = candidate.nth(i);
-      if (!(await nth.isVisible().catch(() => false)) || !(await nth.isEnabled().catch(() => false))) {
-        continue;
+  for (const scope of candidateScopes) {
+    const countryBtnCandidates: Locator[] = [
+      scope.locator(
+        'button[aria-label*="country" i], button[aria-label*="dial" i], button[aria-label*="code" i], button[aria-label*="الدولة"], [role="button"][aria-label*="country" i], [role="button"][aria-label*="dial" i], [role="combobox"][aria-label*="country" i], button[data-testid*="country" i], [role="button"][data-testid*="country" i], [role="combobox"][data-testid*="country" i]',
+      ),
+      scope.locator('button, [role="button"], [role="combobox"]').filter({ hasText: /\+\d{1,3}\b/ }),
+    ];
+
+    for (const candidate of countryBtnCandidates) {
+      const count = await candidate.count().catch(() => 0);
+      for (let i = 0; i < count; i += 1) {
+        const nth = candidate.nth(i);
+        if (!(await nth.isVisible().catch(() => false)) || !(await nth.isEnabled().catch(() => false))) {
+          continue;
+        }
+        const labelAndText = `${await nth.getAttribute('aria-label').catch(() => '') || ''} ${await nth.innerText().catch(() => '')}`.trim();
+        if (/^(close|back|next|submit|send|إغلاق|رجوع|التالي|إرسال)$/i.test(labelAndText)) {
+          continue;
+        }
+        countryBtn = nth;
+        break;
       }
-      const labelAndText = `${await nth.getAttribute('aria-label').catch(() => '') || ''} ${await nth.innerText().catch(() => '')}`.trim();
-      if (/^(close|back|next|submit|إغلاق|رجوع|التالي)$/i.test(labelAndText)) {
-        continue;
-      }
-      countryBtn = nth;
-      break;
+      if (countryBtn) break;
     }
     if (countryBtn) break;
   }
@@ -377,7 +486,31 @@ async function selectCountryCodeIfPresent(
   const searchScopes: Array<Page | Locator> = hasVisibleDialog ? [activeDialog, page] : [page];
 
   const findCountryOptionIn = async (root: Page | Locator): Promise<Locator | null> => {
-    for (const selector of ['button, [role="option"], [role="menuitem"]', 'li']) {
+    const attrOptions = root.locator(
+      `[data-dial-code="${dialDigits}"], [data-code="+${dialDigits}"], [data-country-code="${dialDigits}"]`,
+    );
+    const attrCount = await attrOptions.count().catch(() => 0);
+    let attrFallback: Locator | null = null;
+    for (let i = 0; i < attrCount; i += 1) {
+      const opt = attrOptions.nth(i);
+      if (!(await opt.isVisible().catch(() => false))) continue;
+      const text = (await opt.innerText().catch(() => '')).trim();
+      if (preferredCountryName && text.toLowerCase().includes(preferredCountryName.toLowerCase())) {
+        return opt;
+      }
+      if (!attrFallback) {
+        attrFallback = opt;
+      }
+    }
+    if (attrFallback) {
+      return attrFallback;
+    }
+
+    for (const selector of [
+      'button, [role="option"], [role="menuitem"]',
+      'li',
+      'div[class*="country" i], div[class*="option" i]',
+    ]) {
       const filtered = root.locator(selector).filter({ hasText: exactDialRegex });
       const optCount = await filtered.count().catch(() => 0);
       let fallbackMatch: Locator | null = null;
@@ -420,19 +553,25 @@ async function selectCountryCodeIfPresent(
   let matchedOption = await findCountryOption();
 
   if (!matchedOption) {
-    for (const root of searchScopes) {
-      const searchInput = root
-        .locator(
-          'input[type="search"], input[name*="search" i], input[placeholder*="search" i], input[aria-label*="search" i], input[placeholder*="بحث"]',
-        )
-        .first();
-      if ((await searchInput.count().catch(() => 0)) > 0 && (await searchInput.isVisible().catch(() => false))) {
-        const searchQuery = preferredCountryName || countryCode;
-        await searchInput.fill(searchQuery, { timeout: 2000 }).catch(() => undefined);
-        await page.waitForTimeout(250);
-        matchedOption = await findCountryOption();
-        if (matchedOption) break;
+    const searchQueries = preferredCountryName
+      ? [preferredCountryName, countryCode]
+      : [countryCode];
+
+    for (const query of searchQueries) {
+      for (const root of searchScopes) {
+        const searchInput = root
+          .locator(
+            'input[type="search"], input[name*="search" i], input[placeholder*="search" i], input[aria-label*="search" i], input[placeholder*="بحث"]',
+          )
+          .first();
+        if ((await searchInput.count().catch(() => 0)) > 0 && (await searchInput.isVisible().catch(() => false))) {
+          await searchInput.fill(query, { timeout: 2000 }).catch(() => undefined);
+          await page.waitForTimeout(250);
+          matchedOption = await findCountryOption();
+          if (matchedOption) break;
+        }
       }
+      if (matchedOption) break;
     }
   }
 
@@ -528,7 +667,20 @@ async function processSingleNumber(
       };
     }
 
-    const phoneInput = await waitForPhoneInput(page, 6000);
+    let phoneInput = await waitForPhoneInput(page, 2500);
+    if (!phoneInput) {
+      const navigatedLogin = await openLoginEntryIfNeeded(page);
+      if (navigatedLogin) {
+        if (await checkPageForVerificationGate(page)) {
+          return {
+            status: 'failed',
+            details: 'تحتوي الصفحة على نظام تحقق أمني؛ لا يقوم النظام بتجاوز قيود المواقع.',
+          };
+        }
+        phoneInput = await waitForPhoneInput(page, 4000);
+      }
+    }
+
     if (!phoneInput) {
       return {
         status: 'failed',
